@@ -228,7 +228,14 @@ static void planned_metadata(int source, int app, const char *name, const char *
     CFMutableDictionaryRef expected = CreatePlist(source), actual = CreatePlist(app);
     if (asar_source) {
         CFMutableDictionaryRef integrity = (CFMutableDictionaryRef)CFDictionaryGetValue(expected, CFSTR("ElectronAsarIntegrity"));
-        if (!integrity || CFGetTypeID(integrity) != CFDictionaryGetTypeID() || CFDictionaryGetCount(integrity) != 1) fail("unreviewed ElectronAsarIntegrity layout");
+        if (!integrity || CFGetTypeID(integrity) != CFDictionaryGetTypeID() || CFDictionaryGetCount(integrity) < 1 || CFDictionaryGetCount(integrity) > 8) fail("unreviewed ElectronAsarIntegrity layout");
+        // Other archives (4.29: Resources/ion-dist.asar) are copied unchanged; the
+        // final CFEqual then requires their entries to match the source exactly.
+        CFIndex count = CFDictionaryGetCount(integrity); const void *keys[8], *values[8]; CFDictionaryGetKeysAndValues(integrity, keys, values);
+        for (CFIndex k = 0; k < count; k++) {
+            if (CFGetTypeID(keys[k]) != CFStringGetTypeID() || !CFStringHasPrefix(keys[k], CFSTR("Resources/")) || !CFStringHasSuffix(keys[k], CFSTR(".asar"))) fail("unreviewed ElectronAsarIntegrity layout");
+            if (CFGetTypeID(values[k]) != CFDictionaryGetTypeID() || CFDictionaryGetCount(values[k]) != 2 || !CFEqual(CFDictionaryGetValue(values[k], CFSTR("algorithm")) ?: CFSTR(""), CFSTR("SHA256"))) fail("unreviewed ElectronAsarIntegrity entry");
+        }
         CFMutableDictionaryRef entry = (CFMutableDictionaryRef)CFDictionaryGetValue(integrity, CFSTR("Resources/app.asar"));
         if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID() || CFDictionaryGetCount(entry) != 2) fail("unreviewed app.asar integrity entry");
         CFStringRef algorithm = CFDictionaryGetValue(entry, CFSTR("algorithm")), hash = CFDictionaryGetValue(entry, CFSTR("hash"));
