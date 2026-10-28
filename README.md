@@ -20,6 +20,11 @@ The first copy keeps that name, and the installed paths keep their `claude-duo`
 names (`~/.local/share/claude-duo`, `claude-duo.conf`, the launch agent), so an
 existing installation goes on working without a migration.
 
+**On Windows?** [windows/README.md](windows/README.md) installs **Claude Duo for
+Windows**: a copy of the official Claude (MSIX) that keeps Anthropic's signature,
+with its own profile, a blue icon and its own taskbar button, plus Windows
+versions of `claude-duo`, duo-send, loop-duo and share-code-profile.
+
 ## Why
 
 Claude Desktop holds one account at a time. Switching means signing out and in,
@@ -263,6 +268,12 @@ updater and the tools stay.
 
 ```bash
 python3 scripts/run-security-tests.py all
+```
+
+On Windows, the Windows tooling has its own suite:
+
+```bash
+py -3 -m unittest discover -s windows/tests
 ```
 
 Tests run only in temporary folders with synthetic apps and accounts. CI runs

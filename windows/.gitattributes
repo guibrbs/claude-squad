@@ -1,0 +1,3 @@
+# The double-click wrappers and PowerShell scripts run on Windows: keep CRLF in every checkout and archive.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -1,0 +1,35 @@
+name: Windows tooling
+
+on:
+  push:
+    branches: [main]
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Windows tests
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Record platform
+        run: |
+          [Environment]::OSVersion.VersionString
+          $PSVersionTable.PSVersion.ToString()
+          py -3 --version
+      - name: Run the Windows suite
+        # Temporary folders only: the tests never touch an installed Claude.
+        run: py -3 -m unittest discover -s windows/tests -v
