@@ -18,6 +18,19 @@ are permitted only at these exact paths:
   a script main executable; this is not a directory wildcard exception.
 - `Contents/Resources/mcd-build-id` and, only if a custom icon was applied,
   `Contents/Resources/appicon.icns`.
+- Only when the copy gets its own product name and the source framework carries
+  a used integrity digest slot (Electron 44.9, Claude 4.29): the
+  `Electron Framework` binary, each `Contents/Frameworks/<H>.app/Contents/MacOS/<H>`
+  helper executable, and their `_CodeSignature` files. Electron hashes the whole
+  `ElectronAsarIntegrity` dictionary into a `__DATA_CONST,__asar_integrity` slot
+  of the framework and refuses an `Info.plist` that does not match it, so the
+  copy's new `app.asar` hash needs a new digest there. The framework and its
+  library-validated helpers are then re-signed ad hoc (never `--deep`). The
+  record requires each of these thin 64-bit Mach-O files to equal the source
+  byte for byte except the trailing signature, the two load-command size fields
+  that describe it and, in the framework, the 32 digest bytes, which must be the
+  digest of the planned `Info.plist` dictionary. An unused slot leaves all of
+  them byte-identical.
 
 The unchanged comparison normalizes group/other permission bits because umask
 can restrict them while copying. Owner bits must match. The full generated hash
