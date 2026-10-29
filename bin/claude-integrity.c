@@ -18,8 +18,14 @@
 #define MARKER "Contents/Resources/mcd-build-id"
 #define ASAR "Contents/Resources/app.asar"
 #define ASAR_TEMP "Contents/Resources/.app.asar.mcd-new"
+// Electron 44.9 seals the ElectronAsarIntegrity dictionary into the framework
+// (shell/common/asar/integrity_digest.mm): a SHA-256 slot that must follow
+// the Info.plist hash, so the copy's framework and its helpers are re-signed.
+#define FRAMEWORK_DIR "Contents/Frameworks/Electron Framework.framework/Versions/A/"
+#define FRAMEWORK FRAMEWORK_DIR "Electron Framework"
+#define DIGEST_SENTINEL "AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A"
 struct hashes { unsigned char full[32], unchanged[32]; };
-struct walk { const char *root; dev_t device; bool source, icon, product; size_t entries; };
+struct walk { const char *root; dev_t device; bool source, icon, product, code; size_t entries; };
 static void fail(const char *message) { fprintf(stderr, "integrity: %s\n", message); exit(1); }
 // Metadata moved while observing (e.g. macOS adding com.apple.macl right after
 // publication). Exit 75 lets callers re-run the whole check a bounded number
@@ -109,7 +115,22 @@ static void security_attributes(int fd, CC_SHA256_CTX *c) {
     }
     free(selected); free(buffer);
 }
-static bool mutable(const char *path, bool icon, bool product) {
+static bool signature_file(const char *name) {
+    return !strcmp(name, "CodeResources") || !strcmp(name, "CodeDirectory") || !strcmp(name, "CodeRequirements") || !strcmp(name, "CodeSignature");
+}
+// Contents/Frameworks/<H>.app/Contents/MacOS/<H> and its _CodeSignature files.
+static bool helper_code(const char *path) {
+    static const char prefix[] = "Contents/Frameworks/";
+    if (strncmp(path, prefix, sizeof(prefix) - 1)) return false;
+    const char *name = path + sizeof(prefix) - 1, *end = strstr(name, ".app/Contents/");
+    if (!end || end == name || memchr(name, '/', (size_t)(end - name))) return false;
+    const char *rest = end + 14; size_t length = (size_t)(end - name);
+    if (!strncmp(rest, "_CodeSignature/", 15)) return signature_file(rest + 15);
+    return !strncmp(rest, "MacOS/", 6) && strlen(rest + 6) == length && !strncmp(rest + 6, name, length);
+}
+static bool mutable(const char *path, bool icon, bool product, bool code) {
+    if (code && (!strcmp(path, FRAMEWORK) || (!strncmp(path, FRAMEWORK_DIR "_CodeSignature/", sizeof(FRAMEWORK_DIR "_CodeSignature/") - 1) &&
+        signature_file(path + sizeof(FRAMEWORK_DIR "_CodeSignature/") - 1)) || helper_code(path))) return true;
     return (product && !strcmp(path, ASAR)) || !strcmp(path, "Contents/Info.plist") || !strcmp(path, "Contents/MacOS/Claude") ||
         !strcmp(path, "Contents/MacOS/launcher") || !strcmp(path, "Contents/_CodeSignature/CodeResources") ||
         !strcmp(path, "Contents/_CodeSignature/CodeDirectory") || !strcmp(path, "Contents/_CodeSignature/CodeRequirements") ||
@@ -164,7 +185,7 @@ static struct hashes visit(int fd, const char *path, struct walk *walk, unsigned
             }
             struct stat after; if (fstatat(fd, items[i], &after, AT_SYMLINK_NOFOLLOW) || !same(named, after)) unstable("named app child changed");
             number(&full, strlen(items[i])); update(&full, items[i], strlen(items[i])); update(&full, child.full, 32);
-            if (!mutable(child_path, walk->icon, walk->product)) { number(&fixed, strlen(items[i])); update(&fixed, items[i], strlen(items[i])); update(&fixed, child.unchanged, 32); }
+            if (!mutable(child_path, walk->icon, walk->product, walk->code)) { number(&fixed, strlen(items[i])); update(&fixed, items[i], strlen(items[i])); update(&fixed, child.unchanged, 32); }
             free(items[i]);
         }
         free(items); finish(&full, result.full); finish(&fixed, result.unchanged);
@@ -178,8 +199,8 @@ static int root(const char *path, bool source, bool private) {
     struct stat s = info(fd); struct walk walk = {.source = source, .device = s.st_dev}; metadata(fd, s, &walk);
     if (private && (s.st_mode & 07777) != 0700) fail("record directory must be private"); return fd;
 }
-static struct hashes tree(int fd, const char *path, bool source, bool icon, bool product) {
-    struct walk walk = {.root = path, .device = info(fd).st_dev, .source = source, .icon = icon, .product = product, .entries = 0};
+static struct hashes tree(int fd, const char *path, bool source, bool icon, bool product, bool code) {
+    struct walk walk = {.root = path, .device = info(fd).st_dev, .source = source, .icon = icon, .product = product, .code = code, .entries = 0};
     struct hashes result = visit(fd, "", &walk, 0);
     int named = root(path, source, false); if (!same(info(fd), info(named))) unstable("app root path changed"); close(named); return result;
 }
@@ -228,7 +249,14 @@ static void planned_metadata(int source, int app, const char *name, const char *
     CFMutableDictionaryRef expected = CreatePlist(source), actual = CreatePlist(app);
     if (asar_source) {
         CFMutableDictionaryRef integrity = (CFMutableDictionaryRef)CFDictionaryGetValue(expected, CFSTR("ElectronAsarIntegrity"));
-        if (!integrity || CFGetTypeID(integrity) != CFDictionaryGetTypeID() || CFDictionaryGetCount(integrity) != 1) fail("unreviewed ElectronAsarIntegrity layout");
+        if (!integrity || CFGetTypeID(integrity) != CFDictionaryGetTypeID() || CFDictionaryGetCount(integrity) < 1 || CFDictionaryGetCount(integrity) > 8) fail("unreviewed ElectronAsarIntegrity layout");
+        // Other archives (4.29: Resources/ion-dist.asar) are copied unchanged; the
+        // final CFEqual then requires their entries to match the source exactly.
+        CFIndex count = CFDictionaryGetCount(integrity); const void *keys[8], *values[8]; CFDictionaryGetKeysAndValues(integrity, keys, values);
+        for (CFIndex k = 0; k < count; k++) {
+            if (CFGetTypeID(keys[k]) != CFStringGetTypeID() || !CFStringHasPrefix(keys[k], CFSTR("Resources/")) || !CFStringHasSuffix(keys[k], CFSTR(".asar"))) fail("unreviewed ElectronAsarIntegrity layout");
+            if (CFGetTypeID(values[k]) != CFDictionaryGetTypeID() || CFDictionaryGetCount(values[k]) != 2 || !CFEqual(CFDictionaryGetValue(values[k], CFSTR("algorithm")) ?: CFSTR(""), CFSTR("SHA256"))) fail("unreviewed ElectronAsarIntegrity entry");
+        }
         CFMutableDictionaryRef entry = (CFMutableDictionaryRef)CFDictionaryGetValue(integrity, CFSTR("Resources/app.asar"));
         if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID() || CFDictionaryGetCount(entry) != 2) fail("unreviewed app.asar integrity entry");
         CFStringRef algorithm = CFDictionaryGetValue(entry, CFSTR("algorithm")), hash = CFDictionaryGetValue(entry, CFSTR("hash"));
@@ -264,15 +292,16 @@ static void sync_fd(int fd) { int rc; do { rc = fsync(fd); } while (rc && errno 
 // and its integrity digests in the (equal-length) header change.
 struct asar { unsigned char *bytes; size_t length, raw, payload, package, size, block, hash, blocks, block_at[64]; };
 static unsigned char *read_whole(int parent, const char *path, size_t limit, size_t *length, mode_t *mode) {
-    int fd = openat(parent, path, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC); if (fd < 0) syserr("cannot open app.asar without symlinks");
+    int fd = openat(parent, path, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) { int saved = errno; fprintf(stderr, "integrity: cannot open %s without symlinks: %s\n", path, strerror(saved)); exit(1); }
     struct stat before = info(fd);
-    if (!S_ISREG(before.st_mode) || before.st_nlink != 1 || before.st_size < 16 || (uint64_t)before.st_size > limit) fail("unsupported app.asar type/size");
+    if (!S_ISREG(before.st_mode) || before.st_nlink != 1 || before.st_size < 16 || (uint64_t)before.st_size > limit) fail("unsupported archive/code file type/size");
     unsigned char *bytes = malloc((size_t)before.st_size); if (!bytes) syserr("allocation failed"); size_t total = 0;
     while (total < (size_t)before.st_size) {
         ssize_t n = read(fd, bytes + total, (size_t)before.st_size - total);
-        if (n < 0 && errno == EINTR) continue; if (n <= 0) fail("partial app.asar read"); total += (size_t)n;
+        if (n < 0 && errno == EINTR) continue; if (n <= 0) fail("partial archive/code file read"); total += (size_t)n;
     }
-    char extra; if (read(fd, &extra, 1) != 0 || !same(before, info(fd))) fail("app.asar changed during read");
+    char extra; if (read(fd, &extra, 1) != 0 || !same(before, info(fd))) fail("archive/code file changed during read");
     close(fd); *length = total; if (mode) *mode = before.st_mode & 07777; return bytes;
 }
 static uint32_t le32(const unsigned char *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -448,6 +477,119 @@ static void product_check(int source, int app, const char *name, char before[65]
     free(expected); free(actual);
 }
 
+// Thin 64-bit Mach-O as codesign leaves it: the signature is the last thing in
+// the file, and re-signing changes only it plus two size fields that describe it.
+struct macho { size_t signature, signature_size_at, linkedit_at, slot; bool has_slot; };
+static uint64_t le64(const unsigned char *p) { return (uint64_t)le32(p) | (uint64_t)le32(p + 4) << 32; }
+static struct macho parse_macho(const unsigned char *b, size_t length) {
+    struct macho m = {0}; size_t linkedit = 0, signature = 0;
+    if (length < 32 || le32(b) != 0xfeedfacf) fail("unreviewed Mach-O layout (thin 64-bit only)");
+    uint32_t ncmds = le32(b + 16), sizeofcmds = le32(b + 20); size_t at = 32, end = 32 + (size_t)sizeofcmds;
+    if (end > length) fail("truncated Mach-O load commands");
+    for (uint32_t i = 0; i < ncmds; i++) {
+        if (at + 8 > end) fail("truncated Mach-O load command");
+        uint32_t cmd = le32(b + at), size = le32(b + at + 4); if (size < 8 || at + size > end) fail("invalid Mach-O load command size");
+        if (cmd == 0x19) { // LC_SEGMENT_64
+            if (size < 72 || 72 + (size_t)le32(b + at + 64) * 80 != size) fail("invalid Mach-O segment");
+            if (!memcmp(b + at + 8, "__LINKEDIT\0", 11)) { if (linkedit) fail("duplicate __LINKEDIT"); linkedit = at; }
+            for (size_t k = 0; k < le32(b + at + 64); k++) {
+                const unsigned char *section = b + at + 72 + k * 80;
+                if (strncmp((const char *)section, "__asar_integrity", 16) || strncmp((const char *)section + 16, "__DATA_CONST", 16)) continue;
+                if (m.has_slot) fail("duplicate integrity digest section");
+                uint64_t bytes = le64(section + 40); uint32_t offset = le32(section + 48);
+                if (bytes < 66 || offset + bytes > length) fail("invalid integrity digest section");
+                m.slot = offset; m.has_slot = true;
+            }
+        } else if (cmd == 0x1d) { // LC_CODE_SIGNATURE
+            if (size != 16 || signature) fail("invalid Mach-O signature command"); signature = at;
+        }
+        at += size;
+    }
+    if (at != end || !linkedit || !signature) fail("unreviewed Mach-O load commands");
+    m.signature = le32(b + signature + 8); m.signature_size_at = signature + 12; m.linkedit_at = linkedit;
+    if (m.signature < end || m.signature > length) fail("invalid Mach-O signature offset");
+    if (m.has_slot && (m.slot + 66 > m.signature || memcmp(b + m.slot, DIGEST_SENTINEL, 32))) fail("unexpected integrity digest slot");
+    return m;
+}
+// The copy must equal the source except its own signature and, if given, the digest.
+static void code_check(const unsigned char *source, size_t source_length, const unsigned char *app, size_t app_length, const unsigned char digest[32]) {
+    struct macho s = parse_macho(source, source_length), a = parse_macho(app, app_length);
+    if (s.signature != a.signature || s.linkedit_at != a.linkedit_at || s.has_slot != a.has_slot || s.slot != a.slot || (digest && !s.has_slot)) fail("re-signed code layout moved");
+    unsigned char *expected = malloc(s.signature); if (!expected) syserr("allocation failed");
+    memcpy(expected, source, s.signature);
+    memcpy(expected + s.linkedit_at + 32, app + a.linkedit_at + 32, 8); memcpy(expected + s.linkedit_at + 48, app + a.linkedit_at + 48, 8);
+    memcpy(expected + s.signature_size_at, app + a.signature_size_at, 4);
+    if (digest) memcpy(expected + s.slot + 34, digest, 32);
+    if (memcmp(expected, app, s.signature)) fail("re-signed code differs beyond its signature and integrity digest");
+    free(expected);
+}
+static void string_bytes(CC_SHA256_CTX *c, CFTypeRef value) {
+    char text[1024];
+    if (!value || CFGetTypeID(value) != CFStringGetTypeID() || !CFStringGetCString(value, text, sizeof(text), kCFStringEncodingUTF8)) fail("invalid ElectronAsarIntegrity string");
+    update(c, text, strlen(text));
+}
+static CFComparisonResult literal_order(const void *a, const void *b, void *unused) { (void)unused; return CFStringCompare(a, b, 0); }
+// Same bytes as Electron's IsIntegrityDictionaryValid: sorted path, algorithm, hash.
+static void dictionary_digest(int app, unsigned char digest[32]) {
+    CFMutableDictionaryRef info = CreatePlist(app); CFDictionaryRef integrity = CFDictionaryGetValue(info, CFSTR("ElectronAsarIntegrity"));
+    if (!integrity || CFGetTypeID(integrity) != CFDictionaryGetTypeID()) fail("missing ElectronAsarIntegrity");
+    CFIndex count = CFDictionaryGetCount(integrity); if (count < 1 || count > 8) fail("unreviewed ElectronAsarIntegrity layout");
+    const void *keys[8]; CFDictionaryGetKeysAndValues(integrity, keys, NULL);
+    for (CFIndex k = 0; k < count; k++) if (CFGetTypeID(keys[k]) != CFStringGetTypeID()) fail("unreviewed ElectronAsarIntegrity layout");
+    CFArrayRef sorted = CFArrayCreate(NULL, keys, count, &kCFTypeArrayCallBacks); CFMutableArrayRef order = CFArrayCreateMutableCopy(NULL, count, sorted);
+    if (!sorted || !order) fail("allocation failed");
+    CFArraySortValues(order, CFRangeMake(0, count), literal_order, NULL);
+    CC_SHA256_CTX c; if (!CC_SHA256_Init(&c)) fail("hash initialization failed");
+    for (CFIndex k = 0; k < count; k++) {
+        CFStringRef key = CFArrayGetValueAtIndex(order, k); CFDictionaryRef entry = CFDictionaryGetValue(integrity, key);
+        if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) fail("unreviewed ElectronAsarIntegrity entry");
+        string_bytes(&c, key); string_bytes(&c, CFDictionaryGetValue(entry, CFSTR("algorithm"))); string_bytes(&c, CFDictionaryGetValue(entry, CFSTR("hash")));
+    }
+    finish(&c, digest); CFRelease(order); CFRelease(sorted); CFRelease(info);
+}
+// Slot state of the framework: false when absent or unused (Electron fails open).
+static bool slot_used(const unsigned char *bytes, size_t length, struct macho *m) {
+    *m = parse_macho(bytes, length); if (!m->has_slot || !bytes[m->slot + 32]) return false;
+    if (bytes[m->slot + 32] != 1 || bytes[m->slot + 33] != 1) fail("unreviewed integrity digest slot version"); return true;
+}
+static void seal_write(int app) {
+    struct stat named;
+    if (fstatat(app, FRAMEWORK, &named, AT_SYMLINK_NOFOLLOW)) { if (errno == ENOENT) { printf("none\n"); return; } syserr("cannot inspect framework"); }
+    size_t length; unsigned char *bytes = read_whole(app, FRAMEWORK, 2048ull * 1024 * 1024, &length, NULL); struct macho m;
+    if (!slot_used(bytes, length, &m)) { free(bytes); printf("none\n"); return; }
+    unsigned char digest[32]; dictionary_digest(app, digest);
+    int fd = openat(app, FRAMEWORK, O_WRONLY | O_NOFOLLOW_ANY | O_CLOEXEC); if (fd < 0) syserr("cannot open framework for its digest");
+    struct stat s = info(fd); if (!S_ISREG(s.st_mode) || s.st_nlink != 1 || s.st_uid != getuid() || (size_t)s.st_size != length) fail("framework changed before its digest write");
+    if (pwrite(fd, digest, 32, (off_t)(m.slot + 34)) != 32) syserr("framework digest write failed");
+    sync_fd(fd); if (close(fd)) syserr("framework close failed"); free(bytes); printf("sealed\n");
+}
+// Returns whether the framework and helpers were re-signed; checks each of them.
+static bool sealed_code(int source, int app) {
+    struct stat named;
+    if (fstatat(source, FRAMEWORK, &named, AT_SYMLINK_NOFOLLOW)) { if (errno == ENOENT) return false; syserr("cannot inspect source framework"); }
+    size_t source_length, app_length; struct macho m;
+    unsigned char *original = read_whole(source, FRAMEWORK, 2048ull * 1024 * 1024, &source_length, NULL);
+    if (!slot_used(original, source_length, &m)) { free(original); return false; }
+    unsigned char digest[32]; dictionary_digest(app, digest);
+    unsigned char *copy = read_whole(app, FRAMEWORK, 2048ull * 1024 * 1024, &app_length, NULL);
+    code_check(original, source_length, copy, app_length, digest); free(original); free(copy);
+    int frameworks = openat(source, "Contents/Frameworks", O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC); if (frameworks < 0) syserr("cannot open source frameworks");
+    size_t count; char **items = names(frameworks, &count); close(frameworks);
+    for (size_t i = 0; i < count; i++) {
+        size_t length = strlen(items[i]); char path[PATH_MAX];
+        if (length > 4 && !strcmp(items[i] + length - 4, ".app")) {
+            int size = snprintf(path, sizeof(path), "Contents/Frameworks/%s/Contents/MacOS/%.*s", items[i], (int)(length - 4), items[i]);
+            if (size < 0 || (size_t)size >= sizeof(path)) fail("helper path too long");
+            if (!fstatat(source, path, &named, AT_SYMLINK_NOFOLLOW)) {
+                original = read_whole(source, path, 2048ull * 1024 * 1024, &source_length, NULL); copy = read_whole(app, path, 2048ull * 1024 * 1024, &app_length, NULL);
+                code_check(original, source_length, copy, app_length, NULL); free(original); free(copy);
+            } else if (errno != ENOENT) syserr("cannot inspect helper");
+        }
+        free(items[i]);
+    }
+    free(items); return true;
+}
+
 static void record_create(int records, const char *id, const char *binding, struct hashes source, struct hashes app) {
     if (mkdirat(records, id, 0700)) syserr("record UUID already exists or cannot be created");
     int directory = openat(records, id, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (directory < 0) syserr("cannot open record directory");
@@ -466,6 +608,10 @@ static void field(const char **cursor, const char *end, const char *label, char 
 }
 int main(int argc, char **argv) {
     if (!getuid() || getuid() != geteuid()) fail("requires an unprivileged user"); umask(077);
+    if (argc == 3 && !strcmp(argv[1], "seal")) {
+        // Staging-only writer, after the Info.plist hash; the record re-derives it.
+        int app = root(argv[2], false, false); char id[37]; marker(app, id); seal_write(app); return 0;
+    }
     if (argc == 4 && !strcmp(argv[1], "product-name")) {
         // Staging-only writer; record later regenerates and compares from source.
         int app = root(argv[2], false, false); char id[37]; marker(app, id);
@@ -473,7 +619,7 @@ int main(int argc, char **argv) {
         product_write(app, argv[3]); return 0;
     }
     bool create = argc == 12 && !strcmp(argv[1], "record"), verify = argc == 5 && !strcmp(argv[1], "verify");
-    if (!create && !verify) fail("usage: integrity record ROOT UUID APP SOURCE NAME ID CONFIG ICON PRODUCT LINKS | verify ROOT APP CONFIG | product-name APP NAME");
+    if (!create && !verify) fail("usage: integrity record ROOT UUID APP SOURCE NAME ID CONFIG ICON PRODUCT LINKS | verify ROOT APP CONFIG | product-name APP NAME | seal APP");
     const char *app_path = create ? argv[4] : argv[3], *binding = create ? argv[8] : argv[4];
     if (!digest(binding) || (create && (!uuid(argv[3]) || (strcmp(argv[9], "0") && strcmp(argv[9], "1")) || (strcmp(argv[10], "0") && strcmp(argv[10], "1")) || (strcmp(argv[11], "0") && strcmp(argv[11], "1"))))) fail("invalid UUID/config/icon/product/links arguments");
     int records = root(argv[2], false, true), app = root(app_path, false, false); char id[37]; marker(app, id);
@@ -487,7 +633,8 @@ int main(int argc, char **argv) {
         if (product) product_check(source, app, argv[6], asar_before, asar_after);
         else { struct stat unused; if (!fstatat(app, ASAR_TEMP, &unused, AT_SYMLINK_NOFOLLOW) || errno != ENOENT) fail("unexpected staged archive"); }
         planned_metadata(source, app, argv[6], argv[7], icon, !strcmp(argv[11], "1"), product ? asar_before : NULL, product ? asar_after : NULL);
-        struct hashes original = tree(source, argv[5], true, icon, product), generated = tree(app, app_path, false, icon, product);
+        bool code = product && sealed_code(source, app);
+        struct hashes original = tree(source, argv[5], true, icon, product, code), generated = tree(app, app_path, false, icon, product, code);
         if (memcmp(original.unchanged, generated.unchanged, 32)) fail("app resources differ beyond planned files");
         record_create(records, id, binding, original, generated); printf("RECORDED %s\n", id); return 0;
     }
@@ -498,7 +645,7 @@ int main(int argc, char **argv) {
     const char *cursor = buffer + 16, *end = buffer + length; char recorded[65], source[65], fixed[65], expected[65];
     field(&cursor, end, "config ", recorded); field(&cursor, end, "source ", source); field(&cursor, end, "unchanged ", fixed); field(&cursor, end, "bundle ", expected);
     if (cursor != end || strcmp(recorded, binding)) fail("extra bytes or different instance/config binding");
-    struct hashes observed = tree(app, app_path, false, false, false); char current[65]; hex(observed.full, current);
+    struct hashes observed = tree(app, app_path, false, false, false, false); char current[65]; hex(observed.full, current);
     if (strcmp(current, expected)) fail("bundle content/structure/mode drift; local re-signing does not repair the build record");
     printf("VERIFIED %s (local content record; not an authenticated trust boundary)\n", id); return 0;
 }
