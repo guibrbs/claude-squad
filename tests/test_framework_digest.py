@@ -70,6 +70,14 @@ with open(path, "r+b") as f:
     struct.pack_into("<Q", b, linkedit + 48, len(new))
     if os.environ.get("MOCK_RESIGN_TAMPER") == os.path.basename(path):
         b[40] ^= 1
+    plant = os.environ.get("MOCK_RESIGN_PLANT")
+    if plant and path.endswith("/Electron Framework"):
+        # A Mach-O where the source has none: a copy of a vendor helper.
+        bundle = path.split("/Contents/Frameworks/")[0]
+        gpu = bundle + "/Contents/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)"
+        os.makedirs(os.path.dirname(bundle + "/" + plant), exist_ok=True)
+        with open(gpu, "rb") as vendor, open(bundle + "/" + plant, "wb") as planted:
+            planted.write(vendor.read())
     f.seek(0); f.truncate(); f.write(b)
 with open(os.environ["MOCK_SIGN_LOG"], "a") as log:
     log.write(os.path.basename(path) + "\n")
@@ -158,6 +166,14 @@ class FrameworkDigestTests(unittest.TestCase):
                     self.add_framework()
                 self.fixture.env["MOCK_RESIGN_TAMPER"] = target
                 self.refused("re-signed code differs beyond its signature and integrity digest")
+
+    def test_helper_executable_the_source_lacks_is_refused(self):
+        self.add_framework()
+        empty = "Contents/Frameworks/Claude Helper (Plugin).app/Contents/MacOS/Claude Helper (Plugin)"
+        (self.fixture.source / empty).parents[1].mkdir(parents=True)
+        (self.fixture.source / empty).parents[1].joinpath("Info.plist").write_text("vendor helper plist")
+        self.fixture.env["MOCK_RESIGN_PLANT"] = empty
+        self.refused("helper executable missing from the source exists in the copy")
 
     def test_unreviewed_slot_version_is_refused(self):
         self.add_framework(version=2)

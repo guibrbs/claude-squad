@@ -584,6 +584,8 @@ static bool sealed_code(int source, int app) {
                 original = read_whole(source, path, 2048ull * 1024 * 1024, &source_length, NULL); copy = read_whole(app, path, 2048ull * 1024 * 1024, &app_length, NULL);
                 code_check(original, source_length, copy, app_length, NULL); free(original); free(copy);
             } else if (errno != ENOENT) syserr("cannot inspect helper");
+            // Its path is mutable, so a helper executable the source lacks must stay absent.
+            else if (!fstatat(app, path, &named, AT_SYMLINK_NOFOLLOW) || errno != ENOENT) fail("helper executable missing from the source exists in the copy");
         }
         free(items[i]);
     }
