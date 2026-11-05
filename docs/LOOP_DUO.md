@@ -83,7 +83,9 @@ the other account must not inherit it. The Duo's account gets only its own
 Each account's command line must be signed in, apart from its Desktop app:
 before the first round, `claude auth status` runs on both accounts, and a
 signed-out one stops the loop with the command to run in a Terminal
-(`CLAUDE_CONFIG_DIR=~/.claude-duo claude auth login` for the Duo's).
+(`CLAUDE_CONFIG_DIR=~/.claude-duo claude auth login` for the Duo's). Both
+turns run with `claude -p`, which does not ask for folder trust, so the
+loop's worktree needs none.
 
 ## Permissions
 
@@ -142,7 +144,8 @@ The estimated cost was US$ 0.62.
 - **Running and resuming.** The loop is sequential and runs in the
   foreground. An interrupted loop does not resume: `list` shows it as
   `interrupted`, and the branch keeps what was committed.
-- **Accounts.** Both must have signed in to Code on this Mac.
+- **Accounts.** Both must have opened Code on this Mac, and both `claude`
+  commands must be signed in (see [Accounts and environment](#accounts-and-environment)).
 - **Worktrees.** They live in `~/.local/share/claude-duo/loops`. To remove one,
   run `git worktree remove` in the repository. Uninstalling the Duo moves
   `~/.local/share/claude-duo` to the Trash, loops included.

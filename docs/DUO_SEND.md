@@ -15,6 +15,34 @@ Duo's account, in a repository you name.
 Like loop-duo, the script uses only the Python 3.9 standard library and does
 not touch the apps.
 
+## Before the first send
+
+The Duo app working is not enough: the script runs the Duo's `claude` command,
+which needs two things of its own. Seen with Claude Code 2.1.303.
+
+1. **A CLI login on the Duo's account.** The Duo app's sign-in does not cover
+   the command line, and the script stops before any work while it is missing;
+   the one-time `claude auth login` is in
+   [Accounts and environment](#accounts-and-environment).
+2. **A trusted folder for `--bg`.** A background session starts only in a
+   folder the Duo's account trusts; otherwise `--bg` fails with ``Workspace not
+   trusted. Run `claude` in <folder> once and accept the trust prompt``. The
+   synchronous mode (`claude -p`) runs in the same folder without it. A folder
+   already opened in the Duo's Code tab is trusted; for any other, once, in a
+   Terminal outside any Claude session:
+
+   ```bash
+   cd ~/path/to/repo && CLAUDE_CONFIG_DIR=~/.claude-duo claude
+   ```
+
+   accept the trust prompt and `/exit`.
+
+If the Duo line of the config sets another `CLAUDE_CONFIG_DIR`, or `--to`
+names another copy, use that copy's folder instead of `~/.claude-duo`. When `--bg` fails for an untrusted folder,
+or a turn still answers `Please run /login` after the sign-in check let it
+through, `duo-send.py` prints the command that fixes it, with the right
+folders; `--json` puts it in `hint`.
+
 ## Two modes
 
 | | synchronous (default) | `--bg` |
@@ -27,7 +55,7 @@ not touch the apps.
 
 - **Synchronous** works like a subagent on the other account: the original
   session calls it and reads the answer as the tool result. `--json` returns
-  `{ok, session, cost_usd, answer, error}`. To continue the same Duo session,
+  `{ok, session, cost_usd, answer, error, hint}`. To continue the same Duo session,
   pass `--resume <session>`.
 - **`--bg`** opens a background session that the Duo's `claude agents` lists.
   It does not appear in the original's list: background sessions belong to

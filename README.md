@@ -165,6 +165,9 @@ account, in a repository you name:
 - **`--bg`:** a background session on the Duo's account; returns its id at
   once. `duo-send.py agents`, `logs <id>`, `attach <id>` and `stop <id>` reach
   the Duo's sessions, which the original's `claude agents` does not list.
+- **`--bg` in a new folder:** a background session starts only in a folder
+  the Duo's account trusts. See
+  [docs/DUO_SEND.md](docs/DUO_SEND.md#before-the-first-send).
 - **Another copy:** every command takes `--to trio` (or the name of any copy
   in the config) to reach that account instead of the Duo's.
 - **Talk to a session open in the Duo window:** `duo-send.py sessions` lists

@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 from pathlib import Path
 import socket
 import subprocess
@@ -43,11 +44,16 @@ elif "--bg" in args:
     if mode == "fail":
         print("error: not logged in", file=sys.stderr)
         sys.exit(1)
+    if mode == "untrusted":  # claude 2.1.303 in a folder the account never trusted
+        print(f"Workspace not trusted. Run `claude` in {os.getcwd()} once and accept the trust prompt", file=sys.stderr)
+        sys.exit(1)
     print("backgrounded · 4a79120f\n  claude agents             list sessions")
 else:
     session = args[args.index("--resume") + 1] if "--resume" in args else "sess-duo-0001"
-    ok = mode != "fail"
-    text = "Done: read the README." if ok else "Exceeded USD budget"
+    ok = mode == "ok"
+    # signed_out: what claude -p answers, at cost 0 and exit 1, on a CLI that is not signed in; `auth status`
+    # still says signed in here, as when the sign-in check let the run through.
+    text = {"ok": "Done: read the README.", "signed_out": "Not logged in · Please run /login"}.get(mode, "Exceeded USD budget")
     for event in [
         {"type": "system", "subtype": "init", "session_id": session},
         {"type": "assistant", "message": {"id": "m1", "content": [
@@ -92,8 +98,8 @@ class DuoSendTests(unittest.TestCase):
     def test_sync_runs_on_the_duo_account_in_the_repo_and_returns_the_answer(self):
         process, end = self.send_json("read the README", "--repo", str(self.repo))
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual((end["ok"], end["mode"], end["answer"], end["session"]),
-                         (True, "sync", "Done: read the README.", "sess-duo-0001"))
+        self.assertEqual((end["ok"], end["mode"], end["answer"], end["session"], end["hint"]),
+                         (True, "sync", "Done: read the README.", "sess-duo-0001", None))
         self.assertAlmostEqual(end["cost_usd"], 0.02)
         [call] = self.calls()
         self.assertEqual(call["folder"], str(self.home / ".claude-duo"))
@@ -127,11 +133,31 @@ class DuoSendTests(unittest.TestCase):
         self.assertEqual(process.returncode, 1)
         self.assertFalse(end["ok"])
         self.assertIn("budget", end["error"])
+        self.assertIsNone(end["hint"])
+
+    def test_a_turn_that_says_not_logged_in_gets_the_login_command(self):
+        duo = self.home / ".claude-duo"
+        process, end = self.send_json("task", "--repo", str(self.repo), FAKE_MODE="signed_out")
+        self.assertEqual(process.returncode, 1)
+        self.assertIn("Not logged in", end["error"])
+        self.assertIn(f"`CLAUDE_CONFIG_DIR={duo} claude auth login`", end["hint"])
+        self.assertIn(f"`CLAUDE_CONFIG_DIR={duo} claude auth status`", end["hint"])
+        plain = self.send("send", "task", "--repo", str(self.repo), FAKE_MODE="signed_out")
+        self.assertEqual(plain.returncode, 1)
+        self.assertIn(f"duo-send: {end['hint']}", plain.stderr)
+
+    def test_bg_in_an_untrusted_folder_gets_the_command_that_trusts_it(self):
+        process, end = self.send_json("task", "--repo", str(self.repo), "--bg", FAKE_MODE="untrusted")
+        self.assertEqual(process.returncode, 1)
+        self.assertIn("Workspace not trusted", end["error"])
+        self.assertIn(f"`cd {shlex.quote(str(self.repo))} && "
+                      f"CLAUDE_CONFIG_DIR={shlex.quote(str(self.home / '.claude-duo'))} claude`", end["hint"])
+        self.assertIn("trust prompt and /exit", end["hint"])
 
     def test_bg_starts_a_background_session_on_the_duo_account(self):
         process, end = self.send_json("refactor the parser", "--repo", str(self.repo), "--bg", "--name", "parser")
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual((end["ok"], end["mode"], end["id"]), (True, "bg", "4a79120f"))
+        self.assertEqual((end["ok"], end["mode"], end["id"], end["hint"]), (True, "bg", "4a79120f", None))
         [call] = self.calls()
         self.assertEqual(call["folder"], str(self.home / ".claude-duo"))
         self.assertEqual(call["leaked"], [])
@@ -149,6 +175,8 @@ class DuoSendTests(unittest.TestCase):
         self.assertEqual(process.returncode, 1)
         self.assertEqual((end["ok"], end["id"]), (False, None))
         self.assertIn("not logged in", end["error"])
+        # Only claude's "Please run /login" gets the login hint: this bare phrase is also gh's and npm's.
+        self.assertIsNone(end["hint"])
 
     def test_follow_up_commands_run_on_the_duo_account(self):
         listed = self.send("agents")
@@ -242,6 +270,16 @@ class DuoSendTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 1)
                 self.assertIn(message, json.loads(process.stdout)["error"])
         self.assertEqual(self.calls(), [])
+
+    def test_hints_name_the_copy_and_its_folder(self):
+        self.install_trio()
+        trio = shlex.quote(str(self.home / ".claude-trio"))
+        _, signed_out = self.send_json("task", "--repo", str(self.repo), "--to", "trio", FAKE_MODE="signed_out")
+        self.assertIn("the Trio account's claude command", signed_out["hint"])
+        self.assertIn(f"`CLAUDE_CONFIG_DIR={trio} claude auth login`", signed_out["hint"])
+        _, untrusted = self.send_json("task", "--repo", str(self.repo), "--bg", "--to", "trio", FAKE_MODE="untrusted")
+        self.assertIn(f"&& CLAUDE_CONFIG_DIR={trio} claude`", untrusted["hint"])
+        self.assertIn("Claude Trio's Code tab", untrusted["hint"])
 
 class DuoOpenTests(unittest.TestCase):
     """`open` and `send --open`, in process, with `open` and `claude -p` replaced."""

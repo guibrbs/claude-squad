@@ -39,8 +39,9 @@ TASK
 ```
 
 - Prefer `-` with a quoted heredoc: quotes and backticks need no escaping.
-- `--json` returns `{ok, session, cost_usd, answer, error}`. Relay `answer` to
-  the user; on `ok: false`, show `error`.
+- `--json` returns `{ok, session, cost_usd, answer, error, hint}`. Relay
+  `answer` to the user; on `ok: false`, show `error`, and `hint` when there is
+  one (see "When the script says…" below).
 - Nobody can answer the Duo during this turn: when it needs a decision, it
   says what is missing in its answer. Ask the user, then continue the same
   session with `--resume <session>`.
@@ -61,6 +62,7 @@ TASK
   answer questions), `duo-send.py logs <id>`, `duo-send.py stop <id>`. The
   original account's `claude agents` does not list it.
 - `--max-cost` does not work with `--bg`.
+- On `ok: false`, show `error` and pass on `hint` as in the synchronous mode.
 
 ## On the Duo's screen
 
@@ -102,11 +104,13 @@ starting new work there):
   once.
 - Never send to an address you did not just read from `sessions`.
 
-## When the script says "not signed in"
+## When the script says "not signed in" or gives a `hint`
 
-The Duo's command line has its own sign-in. Give the user the command the
-error prints, to run in a Terminal outside any Claude session and sign in with
-the Duo's account; do not run it yourself.
+The Duo's command line has its own sign-in, and `--bg` needs a folder the
+Duo's account trusts. Give the user the command the error or the `hint`
+prints, to run in a Terminal outside any Claude session (and, for the login,
+sign in with the Duo's account); they are interactive, so do not run them
+yourself.
 
 ## Do not
 
