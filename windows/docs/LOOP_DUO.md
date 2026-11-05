@@ -13,7 +13,7 @@ py -3 -I "$tools\loop-duo.py" list
 ## How it works
 
 1. Creates the `loop-duo/<goal>-<id>` branch from HEAD, in a worktree at
-   `%LOCALAPPDATA%\claude-duo\loops\<id>\tree`. With `--no-worktree` it creates the
+   `%LOCALAPPDATA%\claude-duo-tools\loops\<id>\tree`. With `--no-worktree` it creates the
    branch in the folder itself, which must be clean.
 2. **The developer** (default: original) implements, commits and closes with a
    ```` ```loop-duo ```` JSON block: `review`, `question`, `answer` or `blocked`.
@@ -32,7 +32,7 @@ py -3 -I "$tools\loop-duo.py" list
 - `--until pr`: after approval, pushes the branch and opens a draft PR with `gh`.
   Merging always stays with a person.
 - The whole conversation is in
-  `%LOCALAPPDATA%\claude-duo\loops\<id>\conversation.md` and the state in
+  `%LOCALAPPDATA%\claude-duo-tools\loops\<id>\conversation.md` and the state in
   `loop.json`. `list` marks a loop whose process died as `interrupted`.
 
 ## Requirements

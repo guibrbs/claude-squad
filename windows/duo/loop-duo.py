@@ -170,6 +170,12 @@ def environment(acct):
 def claude_bin():
     local = HOME / ".local/bin/claude.exe"
     found = shutil.which("claude") or (str(local) if local.exists() else None)
+    if found and Path(found).suffix.lower() in (".cmd", ".bat"):
+        # cmd.exe would run it: a newline cuts the arguments and "&" or "|" in a task runs as a command.
+        found = str(local) if local.exists() else None
+        if not found:
+            raise Refused("o claude no PATH é um .cmd (instalação pelo npm); instale o claude.exe nativo "
+                          "(irm https://claude.ai/install.ps1 | iex) e rode de novo")
     if not found:
         raise Refused("o comando claude não está no PATH")
     return found

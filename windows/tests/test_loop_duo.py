@@ -50,6 +50,22 @@ class Accounts(unittest.TestCase):
             self.assertEqual(loop.account("duo")["folder"], Path("D:\\contas\\.duo"))
         self.assertEqual(loop.account("original")["folder"], Path.home() / ".claude")
 
+    def test_a_claude_cmd_is_never_run(self):
+        # cmd.exe would cut the role prompt at its first newline and run "&" or "|" in a task.
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            with mock.patch.object(loop, "HOME", home), \
+                    mock.patch.object(loop.shutil, "which", return_value="C:\\npm\\claude.CMD"):
+                with self.assertRaises(loop.Refused) as refused:
+                    loop.claude_bin()
+                self.assertIn(".cmd", str(refused.exception))
+                native = home / ".local/bin/claude.exe"
+                native.parent.mkdir(parents=True)
+                native.write_bytes(b"")
+                self.assertEqual(loop.claude_bin(), str(native))
+            with mock.patch.object(loop.shutil, "which", return_value="C:\\bin\\claude.exe"):
+                self.assertEqual(loop.claude_bin(), "C:\\bin\\claude.exe")
+
     def test_login_command_uses_wrapper(self):
         self.assertEqual(loop.login_command({"id": "duo"}), "claude-duo auth login")
 

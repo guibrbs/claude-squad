@@ -5,10 +5,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from helpers import load
 
 config = load("duo_config.py")
+config_module = config
 
 
 class ReadConfig(unittest.TestCase):
@@ -32,6 +34,31 @@ class ReadConfig(unittest.TestCase):
             path = Path(folder) / "duo.json"
             path.write_text("[1, 2]", encoding="utf-8")
             self.assertEqual(config.read_config(path), {})
+
+
+class DuoRunning(unittest.TestCase):
+    def listing(self, config, lines):
+        done = subprocess.CompletedProcess([], 0, stdout="\n".join(lines), stderr="")
+        with mock.patch.object(config_module.subprocess, "run", return_value=done) as run:
+            running = config_module.duo_running(config)
+        return running, run.call_args.args[0][-1]
+
+    def test_looks_for_the_renamed_executable_on_the_duo_profile(self):
+        installed = {"exe": "C:\\u\\Programs\\ClaudeDuo\\app\\Claude Work.exe", "userDataDir": "C:\\u\\Claude-Work"}
+        running, script = self.listing(installed, ['"C:\\x\\Claude Work.exe" --user-data-dir="C:\\u\\Claude-Work"'])
+        self.assertTrue(running)
+        self.assertIn("Name='Claude Work.exe'", script)
+        running, _ = self.listing(installed, ['"C:\\x\\claude.exe"'])  # The official app.
+        self.assertFalse(running)
+
+    def test_odd_exe_falls_back_to_the_default_name(self):
+        self.assertEqual(config_module.exe_name({"exe": "C:\\x\\a'b.exe"}), "Claude Duo.exe")
+        self.assertEqual(config_module.exe_name({}), "Claude Duo.exe")
+
+    def test_tool_state_is_not_the_desktop_profile(self):
+        # NTFS ignores case: %LOCALAPPDATA%\\claude-duo is the Duo's Claude-Duo profile.
+        self.assertNotEqual(str(config_module.DATA).lower(), str(config_module.DEFAULT_USER_DATA).lower())
+        self.assertFalse(str(config_module.DATA).lower().startswith(str(config_module.DEFAULT_USER_DATA).lower() + os.sep))
 
 
 class ProcessAlive(unittest.TestCase):

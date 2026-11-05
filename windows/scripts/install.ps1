@@ -57,13 +57,21 @@ $InstallDir = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
 foreach ($folder in $UserDataDir, $CodeConfigDir, $InstallDir) {
     if ($folder.Contains('"') -or $folder.StartsWith('\\')) { Fail "a pasta precisa ser um caminho local sem aspas: $folder" }
     if (-not (Inside $folder $env:USERPROFILE)) { Fail "as pastas do Duo precisam ficar dentro de $env:USERPROFILE" }
+    foreach ($root in $env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, (Join-Path $env:LOCALAPPDATA 'Programs')) {
+        if ($folder -ieq $root.TrimEnd('\')) { Fail "a pasta precisa ser uma subpasta própria do Duo, não $folder" }
+    }
 }
 foreach ($official in (Join-Path $env:LOCALAPPDATA 'Claude-Data'), (Join-Path $env:APPDATA 'Claude'),
                       (Join-Path $env:APPDATA 'Claude-3p'), (Join-Path $env:LOCALAPPDATA 'Packages')) {
     if (Inside $UserDataDir $official) { Fail "UserDataDir aponta para o perfil do Claude oficial: $UserDataDir" }
+    if (Inside $CodeConfigDir $official) { Fail "CodeConfigDir aponta para o perfil do Claude oficial: $CodeConfigDir" }
 }
-if ($CodeConfigDir -ieq (Join-Path $env:USERPROFILE '.claude')) { Fail 'CodeConfigDir não pode ser o ~\.claude do Claude oficial.' }
+if (Inside $CodeConfigDir (Join-Path $env:USERPROFILE '.claude')) { Fail 'CodeConfigDir não pode ser o ~\.claude do Claude oficial.' }
 if ((Inside $UserDataDir $CodeConfigDir) -or (Inside $CodeConfigDir $UserDataDir)) { Fail 'UserDataDir e CodeConfigDir precisam ser pastas separadas.' }
+# O desinstalador apaga InstallDir inteira: os perfis não podem ficar dentro dela, nem ela dentro deles.
+foreach ($folder in $UserDataDir, $CodeConfigDir) {
+    if ((Inside $folder $InstallDir) -or (Inside $InstallDir $folder)) { Fail "InstallDir e os perfis do Duo precisam ser pastas separadas: $folder" }
+}
 
 $app = Join-Path $InstallDir 'app'
 $running = Get-CimInstance Win32_Process -Filter "Name = '$Name.exe'" | Where-Object { $_.ExecutablePath -and (Inside $_.ExecutablePath $app) }
@@ -81,10 +89,12 @@ $config = [ordered]@{
     userDataDir   = $UserDataDir
     codeConfigDir = $CodeConfigDir
     hue           = $Hue
-    appVersion    = "$($package.Version)"
+    # A versão nova só entra depois que a cópia for trocada: uma atualização que falhar é refeita na próxima vez.
+    appVersion    = $(if ($previous) { "$($previous.appVersion)" } else { '' })
     package       = $package.PackageFamilyName
 }
-[System.IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
+function Save-Config { [System.IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false)) }
+Save-Config
 Write-Host "   $configPath"
 
 # 3. Ícone azul, gerado do Claude instalado
@@ -119,6 +129,8 @@ if ($current) {
         Rename-Item $staging 'app'
     }
 }
+$config.appVersion = "$($package.Version)"
+Save-Config
 # Versões anteriores tinham um lançador compilado na raiz; ele não é mais usado.
 Get-ChildItem -LiteralPath $InstallDir -Filter '*.exe' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 Write-Host "   $exe"

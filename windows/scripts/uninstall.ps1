@@ -15,9 +15,19 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+$InstallDir = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
+foreach ($root in $env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, (Join-Path $env:LOCALAPPDATA 'Programs')) {
+    if ($InstallDir -ieq $root.TrimEnd('\')) { Write-Host "recusado: $InstallDir não é uma pasta própria do Duo." -ForegroundColor Red; exit 1 }
+}
 $configPath = Join-Path $InstallDir 'duo.json'
 if (-not (Test-Path $configPath)) { Write-Host "Nada a remover: $configPath não existe."; exit 0 }
 $config = Get-Content -Raw -Encoding UTF8 $configPath | ConvertFrom-Json
+# InstallDir é apagada inteira no fim: um perfil que ficou dentro dela iria junto.
+foreach ($folder in $config.userDataDir, $config.codeConfigDir) {
+    if ($folder -and ("$folder".TrimEnd('\') + '\').StartsWith($InstallDir + '\', 'OrdinalIgnoreCase')) {
+        Write-Host "recusado: o perfil $folder está dentro de $InstallDir; mova-o antes de desinstalar." -ForegroundColor Red; exit 1
+    }
+}
 
 $app = (Join-Path $InstallDir 'app').TrimEnd('\') + '\'
 $running = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe' OR Name = '$($config.name).exe'" |
