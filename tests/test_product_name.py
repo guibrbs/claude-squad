@@ -84,6 +84,25 @@ class ProductNameTests(unittest.TestCase):
         self.assertEqual(old_header["files"]["node_modules"], header["files"]["node_modules"])
         self.assertFalse((self.fixture.app / "Contents/Resources/.app.asar.mcd-new").exists())
 
+    def test_second_sealed_archive_is_copied_with_its_integrity_entry_unchanged(self):
+        # Claude 4.29 seals Resources/ion-dist.asar next to app.asar.
+        extra = {"algorithm": "SHA256", "hash": "ab" * 32}
+        info = self.plist(self.fixture.source)
+        info["ElectronAsarIntegrity"]["Resources/ion-dist.asar"] = extra
+        (self.fixture.source / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+        self.fixture.build()
+        self.assertEqual(self.fixture.run_script("--verify").returncode, 0)
+        self.assertEqual(self.plist(self.fixture.app)["ElectronAsarIntegrity"]["Resources/ion-dist.asar"], extra)
+
+    def test_unreviewed_integrity_entries_are_refused(self):
+        for key, value in [("Frameworks/x.asar", {"algorithm": "SHA256", "hash": "ab" * 32}),
+                           ("Resources/ion-dist.asar", {"algorithm": "SHA512", "hash": "ab" * 32})]:
+            with self.subTest(key=key):
+                info = self.plist(self.fixture.source)
+                info["ElectronAsarIntegrity"] = {"Resources/app.asar": info["ElectronAsarIntegrity"]["Resources/app.asar"], key: value}
+                (self.fixture.source / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+                self.refused("unreviewed ElectronAsarIntegrity")
+
     def test_product_name_keeps_a_desktop_user_agent_token(self):
         # Electron 44 builds "<app.name without spaces>/<version>" into the user
         # agent and names the Keychain item "<app.name> Safe Storage". claude.ai

@@ -11,7 +11,7 @@ shift
 "$CI_TX_HELPER" locked "$CI_APPS" || exit 1
 umask 077
 build_one() (
-    local idx="$1" name="${names[$1]}" dest stage bundle icon old_id build_id icon_changed=0 product_changed=0 asar_hash
+    local idx="$1" name="${names[$1]}" dest stage bundle icon old_id build_id icon_changed=0 product_changed=0 asar_hash sealed=none
     dest="$(ci_app_path "$name")"
     [ ! -L "$dest" ] || { ci_error 'refusing symlinked destination'; return 1; }
     if [ -e "$dest" ]; then
@@ -79,12 +79,24 @@ build_one() (
         asar_hash="$("$CI_INTEGRITY_HELPER" product-name "$bundle" "$name")" || return 1
         [[ "$asar_hash" =~ ^[0-9a-f]{64}$ ]] || { ci_error 'unexpected archive header digest'; return 1; }
         "$CI_PB" -c "Set :ElectronAsarIntegrity:Resources/app.asar:hash $asar_hash" "$bundle/Contents/Info.plist" || return 1
+        # Electron 44.9 also seals that dictionary into its framework.
+        sealed="$("$CI_INTEGRITY_HELPER" seal "$bundle")" || return 1
+        case "$sealed" in sealed|none) ;; *) ci_error 'unexpected framework digest result'; return 1 ;; esac
         product_changed=1
     fi
     ci_render_launcher "$idx" > "$bundle/Contents/MacOS/launcher" || return 1
     chmod 755 "$bundle/Contents/MacOS/launcher" || return 1
     plutil -lint "$bundle/Contents/Info.plist" >/dev/null || return 1
-    # Sign only the executable and outer bundle; never --deep.
+    # Sign only what changed, innermost first; never --deep. The helpers are
+    # library-validated, so they must share the resealed framework's signer.
+    if [ "$sealed" = sealed ]; then
+        codesign --force -s - "$bundle/Contents/Frameworks/Electron Framework.framework" || return 1
+        local helper
+        for helper in "$bundle/Contents/Frameworks/"*.app; do
+            [ -d "$helper" ] && [ ! -L "$helper" ] || continue
+            codesign --force -s - "$helper" || return 1
+        done
+    fi
     codesign --force -s - "$bundle/Contents/MacOS/Claude" || return 1
     codesign --force -s - "$bundle" || return 1
     ci_integrity_helper_valid || return 1

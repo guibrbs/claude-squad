@@ -196,7 +196,9 @@ Details: [docs/DUO_SEND.md](docs/DUO_SEND.md).
 - **Its own Keychain item:** Electron names its encryption key
   `<productName> Safe Storage`. The builder changes only `productName` inside
   `app.asar` to `Duo Claude`, without changing the file size, and reseals the
-  archive hashes. The Duo therefore never asks for the original's
+  archive hashes. Since Claude 4.29 (Electron 44.9) the framework also carries
+  a digest of those hashes, so the builder updates it and re-signs the framework
+  and its helpers locally. The Duo therefore never asks for the original's
   `Claude Safe Storage`. The name is `Duo Claude` rather than `Claude Duo`
   because the user agent drops spaces (`DuoClaude/…`) and claude.ai only enables
   the desktop UI for a `claude/` token.
