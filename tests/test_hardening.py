@@ -210,13 +210,45 @@ exec "$@"
             self.set_mode()
             self.assertNotEqual(self.run_script("--list").returncode, 0)
 
-    def test_original_copy_mode_requires_exactly_one_copy(self):
+    def two_copies(self, two_desktop=None, two_code=None):
         self.write_config([("One", "com.audit.one", str(self.profile("one")), "142", "CLAUDE_CONFIG_DIR=" + str(self.code("one"))),
-                           ("Two", "com.audit.two", str(self.profile("two")), "212", "CLAUDE_CONFIG_DIR=" + str(self.code("two")))])
+                           ("Two", "com.audit.two", two_desktop or str(self.profile("two")), "212",
+                            "CLAUDE_CONFIG_DIR=" + (two_code or str(self.code("two"))))])
         self.set_mode()
+
+    def test_original_copy_mode_builds_several_copies_each_with_its_own_identity(self):
+        self.two_copies()
+        self.build()
+        self.assertEqual(self.run_script("--verify").returncode, 0)
+        two = self.apps / "Claude Two.app"
+        ids = {plistlib.loads((app / "Contents/Info.plist").read_bytes())["CFBundleIdentifier"] for app in (self.app, two)}
+        self.assertEqual(ids, {"com.audit.one", "com.audit.two"})
+        for app in (self.app, two):
+            self.assertIn("profile policy: original-copy", (app / "Contents/MacOS/launcher").read_text())
+
+    def test_adding_a_copy_keeps_the_existing_copy_verified(self):
+        self.write_config([("One", "com.audit.one", str(self.profile("one")), "142", "CLAUDE_CONFIG_DIR=" + str(self.code("one")))])
+        self.set_mode()
+        self.build()
+        build_id = (self.app / "Contents/Resources/mcd-build-id").read_text()
+        self.two_copies()
+        built = self.run_script("Two")
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+        self.assertEqual((self.app / "Contents/Resources/mcd-build-id").read_text(), build_id)
+        self.assertEqual(self.run_script("--verify").returncode, 0)
+
+    def test_every_copy_keeps_off_the_default_profiles(self):
+        for desktop, code in [(str(self.home / "Library/Application Support/Claude"), None), (None, str(self.home / ".claude"))]:
+            self.two_copies(desktop, code)
+            result = self.run_script("--list")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("reserved for the original", result.stderr)
+
+    def test_copies_cannot_share_a_profile(self):
+        self.two_copies(two_code=str(self.code("one")))
         result = self.run_script("--list")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("exactly one", result.stderr)
+        self.assertIn("overlap", result.stderr)
 
     def test_mode_is_data_and_cannot_be_late_duplicate_or_environment_override(self):
         original = self.config.read_text()

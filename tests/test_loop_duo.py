@@ -210,6 +210,37 @@ class LoopDuoTests(unittest.TestCase):
         self.assertTrue(all(c["folder"] == str(custom) for c in self.calls("dev")))
         self.assertTrue(all(c["folder"] is None for c in self.calls("reviewer")))
 
+    def install_trio(self):
+        for folder in ("code-trio",):
+            (self.home / folder).mkdir()
+        config = self.home / ".config/claude-instances/claude-duo.conf"
+        config.parent.mkdir(parents=True)
+        config.write_text("@mode original-copy\n@apps user\n@links claude-dev Duo\n"
+                          "Duo | io.github.x.claude-duo | ~/Library/Application Support/Claude-Duo | 212 | CLAUDE_CONFIG_DIR=~/.claude-duo\n"
+                          "Trio | io.github.x.claude-trio | ~/Library/Application Support/Claude-Trio | 275 | CLAUDE_CONFIG_DIR=~/code-trio\n")
+        pointer = self.home / ".local/share/claude-duo/config-path"
+        pointer.parent.mkdir(parents=True)
+        pointer.write_text(f"{config}\n")
+
+    def test_any_copy_in_the_config_can_take_a_role(self):
+        self.install_trio()
+        process, end = self.loop("--dev", "Trio", "--reviewer", "duo")
+        self.assertEqual(end["status"], "approved", process.stderr)
+        self.assertEqual((end["dev"], end["reviewer"]), ("trio", "duo"))
+        self.assertTrue(all(c["folder"] == str(self.home / "code-trio") for c in self.calls("dev")))
+        self.assertTrue(all(c["folder"] == str(self.home / ".claude-duo") for c in self.calls("reviewer")))
+
+    def test_an_account_the_config_does_not_have_is_refused_with_the_known_ones(self):
+        self.install_trio()
+        for name in ("quatro", "../x", "Trio;rm"):
+            with self.subTest(name=name):
+                refused = self.run_script("run", "x", "--repo", str(self.repo), "--reviewer", name, "--json")
+                self.assertEqual(refused.returncode, 1)
+                self.assertIn("this Mac has: original, duo, trio", json.loads(refused.stdout)["error"])
+        same = self.run_script("run", "x", "--repo", str(self.repo), "--dev", "TRIO", "--reviewer", "trio", "--json")
+        self.assertIn("different accounts", json.loads(same.stdout)["error"])
+        self.assertEqual(self.calls(), [])
+
     def test_the_reviewer_also_asks_the_developer(self):
         process, end = self.loop(FAKE_LOOP="reviewer_asks")
         self.assertEqual(end["status"], "approved", process.stderr)

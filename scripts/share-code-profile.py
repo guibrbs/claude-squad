@@ -12,12 +12,17 @@ With --mcp-servers, the user-scope MCP servers (mcpServers in the original's
 a name the Duo already has is kept, and nothing else in either file is read
 back or changed. Once chosen, later runs also copy servers new to the original.
 
+--account NAME shares with another managed copy instead of the Duo (--account
+Trio): its Code folder and app come from its line in the installed config
+(~/.claude-name and ~/Applications/Claude NAME.app without one).
+
 Default is a dry run. --apply makes the changes with the Duo app closed;
 an existing destination item is moved, never deleted, into a backup folder
 only with --backup-existing.
 """
 import argparse
 import datetime
+import re
 import hashlib
 import json
 import os
@@ -66,6 +71,31 @@ def safe_source(path):
         raise Refused(f"source is not a regular file or directory: {path}")
     if info.st_uid != os.getuid() or info.st_mode & 0o022:
         raise Refused(f"source must be owned by you and not writable by others: {path}")
+
+
+COPY_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+
+def copy_paths(home, name):
+    """(Code folder, app) of the managed copy NAME, from the installed config when its line is there."""
+    if not COPY_NAME.match(name) or name.lower() == "original":
+        raise Refused(f"invalid copy name: {name!r}")
+    folder, app_dir, display = home / f".claude-{name.lower()}", home / "Applications", name
+    pointer = home / ".local/share/claude-duo/config-path"
+    config = Path(pointer.read_text(encoding="utf-8").strip()) if pointer.is_file() and not pointer.is_symlink() else None
+    if config and config.parent == home / ".config/claude-instances" and config.is_file() and not config.is_symlink():
+        lines = [line.split("#", 1)[0].strip() for line in config.read_text(encoding="utf-8").splitlines()]
+        if "@apps user" not in lines:
+            app_dir = Path("/Applications")
+        for line in lines:
+            fields = [field.strip() for field in line.split("|")]
+            if line.startswith("@") or fields[0].lower() != name.lower():
+                continue
+            display = fields[0]
+            for pair in (pair.strip() for field in fields[4:5] for pair in field.split(";")):
+                if pair.startswith("CLAUDE_CONFIG_DIR="):
+                    folder = Path(os.path.expanduser(pair.split("=", 1)[1].strip()))
+    return folder, app_dir / f"Claude {display}.app"
 
 
 def app_running(app):
@@ -142,8 +172,9 @@ def main(argv=None):
     home = Path(os.path.expanduser("~"))
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", type=Path, default=home / ".claude")
-    parser.add_argument("--destination", type=Path, default=home / ".claude-duo")
-    parser.add_argument("--app", type=Path, default=home / "Applications/Claude Duo.app")
+    parser.add_argument("--account", metavar="NAME", help="the managed copy to share with (default: Duo)")
+    parser.add_argument("--destination", type=Path, help="the copy's Code folder (default: from --account)")
+    parser.add_argument("--app", type=Path, help="the copy's app (default: from --account)")
     parser.add_argument("--apply", action="store_true", help="make the changes (default: dry run)")
     parser.add_argument("--backup-existing", action="store_true",
                         help="move existing Duo items aside instead of refusing")
@@ -153,6 +184,10 @@ def main(argv=None):
                         help="also copy the original's user-scope MCP servers (kept on later runs)")
     args = parser.parse_args(argv)
     try:
+        if args.account is not None or args.destination is None or args.app is None:
+            folder, app = copy_paths(home, args.account or "Duo")
+            args.destination = args.destination or folder
+            args.app = args.app or app
         source, destination = args.source.absolute(), args.destination.absolute()
         owned_private_dir(source, "source")
         owned_private_dir(destination, "destination")
@@ -160,7 +195,7 @@ def main(argv=None):
         if real_source == real_destination or real_destination.startswith(real_source + "/") or real_source.startswith(real_destination + "/"):
             raise Refused("source and destination must be separate folders")
         if args.apply and app_running(args.app):
-            raise Refused("Claude Duo is running; quit it (Command-Q) and run again")
+            raise Refused(f"{args.app.stem} is running; quit it (Command-Q) and run again")
 
         actions = []  # (kind, source, destination, note)
         for name in LINKED:

@@ -209,6 +209,40 @@ class DuoSendTests(unittest.TestCase):
         self.assertEqual(self.calls()[0]["folder"], str(custom))
 
 
+    def install_trio(self):
+        (self.home / ".claude-trio").mkdir()
+        config = self.home / ".config/claude-instances/claude-duo.conf"
+        config.parent.mkdir(parents=True)
+        config.write_text("@mode original-copy\n@apps user\n"
+                          "Duo | io.github.x.claude-duo | ~/Library/Application Support/Claude-Duo | 212 | CLAUDE_CONFIG_DIR=~/.claude-duo\n"
+                          "Trio | io.github.x.claude-trio | ~/Library/Application Support/Claude-Trio | 275 | CLAUDE_CONFIG_DIR=~/.claude-trio\n")
+        pointer = self.home / ".local/share/claude-duo/config-path"
+        pointer.parent.mkdir(parents=True)
+        pointer.write_text(str(config))
+
+    def test_to_sends_to_another_copy_of_the_config(self):
+        self.install_trio()
+        process, end = self.send_json("read the README", "--repo", str(self.repo), "--to", "Trio")
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(end["account"], "trio")
+        [call] = self.calls()
+        self.assertEqual(call["folder"], str(self.home / ".claude-trio"))
+        self.assertIn("Claude Trio account", call["args"][call["args"].index("--append-system-prompt") + 1])
+        background, started = self.send_json("task", "--repo", str(self.repo), "--bg", "--to", "trio")
+        self.assertEqual(background.returncode, 0, background.stderr)
+        self.assertEqual(started["commands"]["attach"], f"CLAUDE_CONFIG_DIR={self.home / '.claude-trio'} claude attach 4a79120f")
+        self.assertEqual(self.send("logs", "4a79120f", "--to", "trio").returncode, 0)
+        self.assertEqual(self.calls()[-1]["folder"], str(self.home / ".claude-trio"))
+
+    def test_to_refuses_the_original_and_unknown_accounts(self):
+        self.install_trio()
+        for name, message in (("original", "names a copy"), ("quatro", "this Mac has: original, duo, trio")):
+            with self.subTest(name=name):
+                process = self.send("send", "task", "--repo", str(self.repo), "--to", name, "--json")
+                self.assertEqual(process.returncode, 1)
+                self.assertIn(message, json.loads(process.stdout)["error"])
+        self.assertEqual(self.calls(), [])
+
 class DuoOpenTests(unittest.TestCase):
     """`open` and `send --open`, in process, with `open` and `claude -p` replaced."""
 
@@ -302,6 +336,24 @@ class DuoOpenTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["opened"].split("?")[0], "claude-dev://resume")
         self.assertEqual(self.link()[2]["session"], session)
+
+    def add_trio(self, links):
+        self.write_config(links)
+        (self.home / ".claude-trio").mkdir()
+        self.config.write_text(self.config.read_text() + "Trio | io.github.tester.claude-trio | "
+                               "~/Library/Application Support/Claude-Trio | 275 | CLAUDE_CONFIG_DIR=~/.claude-trio\n")
+
+    def test_with_several_copies_only_the_one_the_links_name_opens_sessions(self):
+        self.add_trio("@links claude-dev Trio")
+        code, out, _ = self.main("open", "--repo", str(self.repo), "--to", "trio")
+        self.assertEqual(code, 0)
+        self.assertIn("opened in Claude Trio", out)
+        self.assertEqual(self.opened[-1][:3], ["/usr/bin/open", "-b", "io.github.tester.claude-trio"])
+        count = len(self.opened)
+        code, _, err = self.main("open", "--repo", str(self.repo))  # The Duo, which has no links now.
+        self.assertEqual(code, 1)
+        self.assertIn("the config gives claude-dev:// to Claude Trio", err)
+        self.assertEqual(len(self.opened), count)
 
     def test_without_links_in_the_config_nothing_runs_and_the_fix_is_named(self):
         self.write_config()
@@ -401,6 +453,35 @@ class DuoSessionsTests(unittest.TestCase):
                 process = self.run_tool("whois", address)
                 self.assertEqual(process.returncode, 1)
                 self.assertIn(error, process.stderr)
+
+    def add_trio(self):
+        registry = self.home / ".claude-trio/sessions"
+        registry.mkdir(parents=True)
+        config = self.home / ".config/claude-instances/claude-duo.conf"
+        config.parent.mkdir(parents=True)
+        config.write_text("@mode original-copy\n@apps user\n"
+                          "Duo | io.github.x.claude-duo | ~/Library/Application Support/Claude-Duo | 212 | CLAUDE_CONFIG_DIR=~/.claude-duo\n"
+                          "Trio | io.github.x.claude-trio | ~/Library/Application Support/Claude-Trio | 275 | CLAUDE_CONFIG_DIR=~/.claude-trio\n")
+        pointer = self.home / ".local/share/claude-duo/config-path"
+        pointer.parent.mkdir(parents=True)
+        pointer.write_text(str(config))
+        return registry
+
+    def test_inbox_and_whois_reach_every_copy(self):
+        registry = self.add_trio()
+        repo = self.home / "repo"
+        repo.mkdir()
+        trio = self.entry("[repo] Duo inbox", cwd=str(repo), registry=registry)
+        found = self.run_tool("inbox", "--repo", str(repo), "--to", "trio")
+        self.assertEqual((found.returncode, found.stdout.strip()), (0, "uds:" + trio["messagingSocketPath"]))
+        none = self.run_tool("inbox", "--repo", str(repo))  # The Duo has none there.
+        self.assertEqual(none.returncode, 1)
+        self.assertIn("no Duo inbox is open", none.stderr)
+        trio_none = self.run_tool("inbox", "--repo", str(self.home), "--to", "trio")
+        self.assertIn(f"duo-send.py inbox --open --to trio --repo {self.home}", trio_none.stderr)
+        who = self.run_tool("whois", "uds:" + trio["messagingSocketPath"], "--json")
+        self.assertEqual(who.returncode, 0, who.stderr)
+        self.assertEqual(json.loads(who.stdout)["account"], "trio")
 
     def run_sessions(self, *args):
         return self.run_tool("sessions", *args)

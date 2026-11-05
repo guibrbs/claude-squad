@@ -111,6 +111,22 @@ class MaintenanceTests(unittest.TestCase):
             self.assertFalse(list(self.profile.glob(".claude-cache.*")))
             self.env.pop(key)
 
+    def test_unknown_pass_is_retried_and_a_settled_pass_counts(self):
+        # Right after a build a process can be caught mid-exec: the helper
+        # repeats the pass instead of refusing at once.
+        self.env["MOCK_PS_FAIL_PASSES"] = "2"
+        result = subprocess.run([str(self.helper), "desktop-idle"], env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stderr, "")
+
+    def test_unknown_on_every_pass_stays_unknown_and_names_the_process(self):
+        self.env["MOCK_PS_FAIL_PASSES"] = "3"
+        result = subprocess.run([str(self.helper), "desktop-idle"], env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stderr, "process 4242 (fixture) changed while observed\n")
+        self.env["MOCK_PS_FAIL_PASSES"] = "2"
+        self.assertEqual(self.clean().returncode, 0)
+
     def test_native_clean_requires_inherited_lock_and_restricts_profile_paths(self):
         result = subprocess.run([str(self.helper), "clean", str(self.apps), str(self.profile)],
                                 env=self.env, text=True, capture_output=True)

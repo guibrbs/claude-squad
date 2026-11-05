@@ -16,25 +16,44 @@ static bool maintenance_match(const char *executable, const char *app) {
     binary += strlen("/Contents/MacOS/");
     return !strcmp(binary, "Claude") || !strncmp(binary, "Claude Helper", 13) || !strcmp(binary, "launcher");
 }
-// Names a process whose executable path cannot be read. An old helper kept
-// alive after Claude updated itself runs a deleted file: the path is gone but
-// the kernel keeps the name it was started with. Non-printable bytes are masked.
-static void maintenance_report(pid_t pid, const struct proc_bsdinfo *info, int error) {
-    char name[sizeof(info->pbi_name) + 1]; size_t i = 0;
+// The name the kernel keeps for a process, with non-printable bytes masked.
+#define MAINTENANCE_NAME_SIZE (sizeof(((struct proc_bsdinfo *)0)->pbi_name) + 1)
+static void maintenance_name(const struct proc_bsdinfo *info, char name[static MAINTENANCE_NAME_SIZE]) {
+    size_t i = 0;
     for (; i < sizeof(info->pbi_name) && info->pbi_name[i]; i++)
         name[i] = info->pbi_name[i] >= ' ' && info->pbi_name[i] <= '~' ? info->pbi_name[i] : '?';
     name[i] = '\0';
+}
+// Names a process whose executable path cannot be read. An old helper kept
+// alive after Claude updated itself runs a deleted file: the path is gone but
+// the kernel keeps the name it was started with.
+static void maintenance_report(pid_t pid, const struct proc_bsdinfo *info, int error) {
+    char name[MAINTENANCE_NAME_SIZE]; maintenance_name(info, name);
     if (error == ENOENT) fprintf(stderr, "process %d (%s) runs a deleted executable; quit it and retry\n", (int)pid, name);
     else fprintf(stderr, "process %d (%s) cannot be observed: %s\n", (int)pid, name, strerror(error));
 }
-// 0=running, 1=none observed, 2=unknown. Unknown can never authorize mutation.
-static int maintenance_process_state(const char *app) {
+// Names a process that changed between two reads (exec, exit and PID reuse).
+static void maintenance_report_changed(pid_t pid, const struct proc_bsdinfo *info) {
+    char name[MAINTENANCE_NAME_SIZE]; maintenance_name(info, name);
+    fprintf(stderr, "process %d (%s) changed while observed\n", (int)pid, name);
+}
+// One pass over the user's processes: 0=running, 1=none observed, 2=unknown.
+// A process running a deleted executable stays unknown until someone quits it,
+// so it sets *lasting and is always named; the other unknowns are races with
+// processes starting or exiting, named only when report is set (last pass).
+static int maintenance_process_scan(const char *app, bool report, bool *lasting) {
 #ifdef MCD_PROCESS_FIXTURE
+    static int fixture_passes = 0;
+    const char *fixture_failures = getenv("MOCK_PS_FAIL_PASSES");
+    if (fixture_failures && fixture_passes++ < atoi(fixture_failures)) {
+        if (report) fprintf(stderr, "process 4242 (fixture) changed while observed\n");
+        return 2;
+    }
     if (getenv("MOCK_PS_FAIL")) return 2;
     const char *fixture_running = getenv("MOCK_RUNNING_APP");
     return fixture_running && *fixture_running && (!app || !strcmp(app, fixture_running)) ? 0 : 1;
 #endif
-    if (app && (app[0] != '/' || strlen(app) >= PROC_PIDPATHINFO_MAXSIZE - 16)) return 2;
+    if (app && (app[0] != '/' || strlen(app) >= PROC_PIDPATHINFO_MAXSIZE - 16)) { *lasting = true; return 2; }
     int needed = proc_listpids(PROC_UID_ONLY, getuid(), NULL, 0);
     if (needed <= 0 || needed > 16 * 1024 * 1024) return 2;
     int capacity = needed + (int)(512 * sizeof(pid_t));
@@ -46,26 +65,59 @@ static int maintenance_process_state(const char *app) {
         pid_t pid = pids[i]; if (pid <= 0) continue;
         struct proc_bsdinfo before, after;
         if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &before, sizeof(before)) != sizeof(before)) {
-            if (maintenance_gone(pid)) continue; result = 2; break;
+            int error = errno;
+            if (maintenance_gone(pid)) continue;
+            if (report) fprintf(stderr, "process %d cannot be observed: %s\n", (int)pid, strerror(error));
+            result = 2; break;
         }
         if (before.pbi_status == SZOMB) continue;
-        if (before.pbi_pid != (uint32_t)pid || before.pbi_uid != getuid()) { result = 2; break; }
+        if (before.pbi_pid != (uint32_t)pid || before.pbi_uid != getuid()) {
+            if (report) maintenance_report_changed(pid, &before);
+            result = 2; break;
+        }
         char first[PROC_PIDPATHINFO_MAXSIZE], second[PROC_PIDPATHINFO_MAXSIZE];
         memset(first, 0, sizeof(first)); memset(second, 0, sizeof(second));
         if (proc_pidpath(pid, first, sizeof(first)) <= 0 || proc_pidpath(pid, second, sizeof(second)) <= 0 ||
             proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, sizeof(after)) != sizeof(after)) {
             int error = errno;
             // Still unknown; keep scanning only to name every such process.
-            if (maintenance_gone(pid)) continue; maintenance_report(pid, &before, error); result = 2; continue;
+            if (maintenance_gone(pid)) continue;
+            if (error == ENOENT) *lasting = true;
+            if (report || error == ENOENT) maintenance_report(pid, &before, error);
+            result = 2; continue;
         }
         if (after.pbi_status == SZOMB) continue;
         if (first[0] != '/' || !memchr(first, '\0', sizeof(first)) || !memchr(second, '\0', sizeof(second)) ||
             strcmp(first, second) || before.pbi_pid != after.pbi_pid || before.pbi_uid != after.pbi_uid ||
-            before.pbi_start_tvsec != after.pbi_start_tvsec || before.pbi_start_tvusec != after.pbi_start_tvusec) { result = 2; break; }
+            before.pbi_start_tvsec != after.pbi_start_tvsec || before.pbi_start_tvusec != after.pbi_start_tvusec) {
+            if (report) maintenance_report_changed(pid, &before);
+            result = 2; break;
+        }
         if (pid == getpid()) saw_self = true;
         if (maintenance_match(first, app)) running = true;
     }
-    free(pids); if (result == 2 || !saw_self) return 2; return running ? 0 : 1;
+    free(pids);
+    if (result != 2 && !saw_self && report) fprintf(stderr, "own process missing from the process list\n");
+    if (result == 2 || !saw_self) return 2; return running ? 0 : 1;
+}
+// Right after a build the system is busy with the new bundle (code signing,
+// Gatekeeper, Spotlight) and a pass can catch a process mid-exec. An unknown
+// pass is repeated a few times; it never turns into "none observed" unless a
+// later full pass observes every process.
+#ifdef MCD_PROCESS_FIXTURE
+#define MAINTENANCE_SETTLE_USEC 10000
+#else
+#define MAINTENANCE_SETTLE_USEC 2000000
+#endif
+#define MAINTENANCE_PASSES 3
+// 0=running, 1=none observed, 2=unknown. Unknown can never authorize mutation.
+static int maintenance_process_state(const char *app) {
+    for (int pass = 1;; pass++) {
+        bool lasting = false;
+        int state = maintenance_process_scan(app, pass == MAINTENANCE_PASSES, &lasting);
+        if (state != 2 || lasting || pass == MAINTENANCE_PASSES) return state;
+        usleep(MAINTENANCE_SETTLE_USEC);
+    }
 }
 static void cache_hook(const char *point) {
 #ifdef MCD_TRANSACTION_TESTING

@@ -1,6 +1,6 @@
 ---
 name: duo-send
-description: Talks to the Claude Duo account and hands it tasks (the second Claude Code account of this Mac, CLAUDE_CONFIG_DIR=~/.claude-duo) through duo/duo-send.py — synchronously, returning its answer like a subagent on the other account, or as a background session (--bg) that the user follows with `duo-send.py agents` and `attach`. Use for "send this to the Duo", "ask the Duo to…", "message the session X in the Duo", "tell the Duo session to…", "open a session on the other account", "abre essa sessão no Claude Duo", "open it in the Duo instead of here", "give it to the Duo inbox", "do it in the Duo where I can see", "let the Duo work on it in the background", or when this account's usage is running out and the work can go on in the Duo. Not for review rounds between the two accounts (that is loop-duo) and not from a session that already runs on the Duo account.
+description: Talks to the Claude Duo account and hands it tasks (the second Claude Code account of this Mac, CLAUDE_CONFIG_DIR=~/.claude-duo) through duo/duo-send.py — synchronously, returning its answer like a subagent on the other account, or as a background session (--bg) that the user follows with `duo-send.py agents` and `attach`. Use for "send this to the Duo", "ask the Duo to…", "message the session X in the Duo", "tell the Duo session to…", "open a session on the other account", "abre essa sessão no Claude Duo", "open it in the Duo instead of here", "give it to the Duo inbox", "do it in the Duo where I can see", "let the Duo work on it in the background", or when this account's usage is running out and the work can go on in the Duo. Also reaches the other managed copies of the config (Claude Trio…) with `--to`: "send this to the Trio". Not for review rounds between the two accounts (that is loop-duo) and not from a session that already runs on the Duo account.
 ---
 
 # duo-send
@@ -11,11 +11,19 @@ name. `duo/install-duo.sh` installs it at `~/.local/share/claude-duo/duo-send.py
 Always run it with `/usr/bin/python3 -I`. If the file is missing, tell the user
 to run `duo/install-duo.sh` again from an up-to-date checkout.
 
+## Which account
+
+Every command goes to the Duo unless it has `--to NAME`: `--to trio` reaches
+Claude Trio, and any other copy the installed config lists works the same way.
+Use the copy the user named; when they only say "the other account" and there
+is more than one copy, ask which. An unknown name is refused with the list of
+accounts. The examples below use the Duo; add `--to <name>` for another copy.
+
 ## Before sending
 
-- **Are you already the Duo?** If `CLAUDE_CONFIG_DIR` in your environment is
-  the Duo's folder (`~/.claude-duo` by default), stop: the work would go to
-  your own account. Say so to the user.
+- **Are you already that copy?** If `CLAUDE_CONFIG_DIR` in your environment is
+  the target's folder (`~/.claude-duo` for the Duo, `~/.claude-trio` for the
+  Trio), stop: the work would go to your own account. Say so to the user.
 - **Show the user the task text and the repository, and wait for their OK.**
   The task uses the Duo account's usage.
 - Write the task as a complete brief: the repository, the files or area, what
@@ -97,10 +105,12 @@ when it is done, use `send --open` instead:
 TASK
 ```
 
-Both need the Duo built with links. If the script refuses for that reason,
-tell the user to run `duo/install-duo.sh --links` from an up-to-date checkout,
-outside any Claude session. It rebuilds the Duo and quits and reopens both
-apps. Do not run it or edit the config yourself.
+Both need the copy built with links. Only one copy can take `claude-dev://`
+links (the config's `@links claude-dev <name>` line names it): `open` to
+another copy is refused, and the error says which copy has them. If the script
+refuses for that reason, tell the user to run `duo/install-duo.sh --links` from
+an up-to-date checkout, outside any Claude session. It rebuilds the copies and
+quits and reopens the apps. Do not run it or edit the config yourself.
 
 ## Hand a task to the Duo inbox (visible in the Duo window)
 

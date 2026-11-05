@@ -40,6 +40,10 @@ This opens a Code session in the Duo window, in that folder, with
 and waits. The original Claude does this step for you when no inbox is open,
 and asks you to press Enter.
 
+With several copies, every copy's Code folder gets `duo-inbox`, and `inbox`
+takes `--to trio` (or any copy's name) like the other commands; without it,
+the Duo. `whois` reads the registries of the original and of every copy.
+
 ## Sending it work (the original Claude)
 
 Ask the original Claude something like "give this to the Duo inbox". Its
@@ -56,7 +60,7 @@ Ask the original Claude something like "give this to the Duo inbox". Its
 ## What the inbox does with a task (`duo-inbox` skill)
 
 - **Checks the sender** with `duo-send.py whois <from>`. That command reads
-  both accounts' session registries and says whose session answers on the
+  every account's session registry and says whose session answers on the
   address. The inbox takes work only from the original's or the Duo's own
   sessions.
 - **One task at a time.** A task that arrives mid-work gets `queued` and runs

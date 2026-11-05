@@ -85,6 +85,50 @@ class LinksTests(unittest.TestCase):
         self.assertNotEqual(self.fixture.run_script("--list").returncode, 0)
         self.assertFalse((self.fixture.root / "marker").exists())
 
+    def two_copies(self, *headers):
+        f = self.fixture
+        rows = [("One", "com.audit.one", str(f.profile("one")), "142", "CLAUDE_CONFIG_DIR=" + str(f.code("one"))),
+                ("Two", "com.audit.two", str(f.profile("two")), "212", "CLAUDE_CONFIG_DIR=" + str(f.code("two")))]
+        f.config.write_text("".join(h + "\n" for h in headers) + "".join(" | ".join(r) + "\n" for r in rows))
+
+    def info_of(self, name):
+        return plistlib.loads((self.fixture.apps / f"Claude {name}.app/Contents/Info.plist").read_bytes())
+
+    def test_with_several_copies_only_the_named_one_takes_the_links(self):
+        self.two_copies("@mode original-copy", "@links claude-dev two")
+        self.fixture.build()
+        self.assertNotIn("CFBundleURLTypes", self.info_of("One"))
+        self.assertEqual(self.info_of("Two")["CFBundleURLTypes"],
+                         [{"CFBundleURLName": "Claude Two links", "CFBundleURLSchemes": ["claude-dev"]}])
+        self.assertEqual(self.fixture.run_script("--verify").returncode, 0)
+
+    def test_with_several_copies_the_links_must_name_a_configured_copy(self):
+        for headers, message in ((("@mode original-copy", "@links claude-dev"), "name the one that takes links"),
+                                 (("@mode original-copy", "@links claude-dev Three"), "not configured"),
+                                 (("@mode original-copy", "@links claude-dev One Two"), "invalid instance name")):
+            with self.subTest(headers=headers):
+                self.two_copies(*headers)
+                result = self.fixture.run_script("--list")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_naming_the_only_copy_is_the_same_as_not_naming_it(self):
+        self.configure("@mode original-copy", "@links claude-dev")
+        self.fixture.build()
+        self.configure("@mode original-copy", "@links claude-dev ONE")
+        self.assertEqual(self.fixture.run_script("--verify").returncode, 0)
+
+    def test_moving_the_links_to_another_copy_requires_rebuilding_both(self):
+        self.two_copies("@mode original-copy", "@links claude-dev One")
+        self.fixture.build()
+        self.two_copies("@mode original-copy", "@links claude-dev Two")
+        result = self.fixture.run_script("--verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Claude One: FAILED", result.stderr)
+        self.assertIn("Claude Two: FAILED", result.stderr)
+        self.fixture.build()
+        self.assertEqual(self.fixture.run_script("--verify").returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

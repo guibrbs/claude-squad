@@ -9,7 +9,10 @@ selective importer remains a proposal.
 ## Implemented: sharing through links (the user's decision)
 
 [`scripts/share-code-profile.py`](../scripts/share-code-profile.py) makes the
-Duo's Code (`~/.claude-duo`) use the **same files** as the original (`~/.claude`):
+Duo's Code (`~/.claude-duo`) use the **same files** as the original (`~/.claude`).
+`--account Trio` does the same for another managed copy, with the Code folder
+and app of its line in the installed config; **Update Claude Squad** refreshes
+every copy that has a `.shared-from-original.json`:
 
 - Links: `CLAUDE.md`, `skills`, `output-styles`, `tools`, `plugins` and each
   `projects/<project>/memory`. A memory saved by one app shows up in the other.

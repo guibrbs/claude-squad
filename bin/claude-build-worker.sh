@@ -44,7 +44,7 @@ build_one() (
             "$CI_PB" -c "Delete :$key" "$bundle/Contents/Info.plist" || return 1
         fi
     done
-    if [ "$CI_LINKS" = claude-dev ]; then
+    if ci_links_for "$idx"; then
         # The copy's own way in for links: claude:// stays with the official
         # app; the Desktop also accepts claude-dev://. The record expects this.
         "$CI_PB" -c 'Add :CFBundleURLTypes array' -c 'Add :CFBundleURLTypes:0 dict' \

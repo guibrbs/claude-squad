@@ -159,7 +159,7 @@ Select this policy explicitly, before any instance rows:
 Duo | com.example.claude-duo | ~/Library/Application Support/Claude-Duo | 212 | CLAUDE_CONFIG_DIR=~/.claude-duo
 ```
 
-The parser requires exactly one managed copy and reserves both physical,
+The parser accepts one or more managed copies and reserves both physical,
 case-folded default Desktop/Code paths to the original, including cross-type
 overlap and symlink aliases. Mode comes from config data; an inherited CI_MODE
 cannot weaken it. Duplicate, unknown or late directives are refused. The mode

@@ -139,8 +139,10 @@ ci_load_config() {
     CI_MODE=legacy-copies
     CI_APP_SCOPE=system; CI_APPS="$CI_SYSTEM_APPS"
     # Links: off unless the config asks; only claude-dev, which the Desktop
-    # accepts and the official app does not register.
-    CI_LINKS=none
+    # accepts and the official app does not register. LaunchServices gives a
+    # scheme to one app, so exactly one copy takes it: the one named after
+    # the scheme, or the only copy when none is named.
+    CI_LINKS=none; CI_LINKS_TARGET=""
     local mode_seen=no apps_seen=no links_seen=no line n bid dir hue env extra pair key value seen normalized code_dir a b
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%%#*}"; line="$(ci_trim "$line")"
@@ -155,7 +157,12 @@ ci_load_config() {
             apps_seen=yes; continue ;;
         @links*)
             [ "$links_seen" = no ] && [ "${#names[@]}" -eq 0 ] || { ci_error 'links must appear once before instances'; return 1; }
-            case "$line" in '@links claude-dev') CI_LINKS=claude-dev ;; '@links none') CI_LINKS=none ;; *) ci_error 'unknown links scheme; use claude-dev or none'; return 1 ;; esac
+            case "$line" in '@links claude-dev') CI_LINKS=claude-dev ;; '@links none') CI_LINKS=none ;;
+                '@links claude-dev '*)
+                    CI_LINKS_TARGET="${line#@links claude-dev }"
+                    [[ "$CI_LINKS_TARGET" =~ ^[A-Za-z][A-Za-z0-9_-]{0,63}$ ]] || { ci_error 'links name an invalid instance name'; return 1; }
+                    CI_LINKS=claude-dev; CI_LINKS_TARGET="$(ci_lower "$CI_LINKS_TARGET")" ;;
+                *) ci_error 'unknown links scheme; use claude-dev [name] or none'; return 1 ;; esac
             links_seen=yes; continue ;;
         esac
         IFS='|' read -r n bid dir hue env extra <<<"$line"
@@ -193,9 +200,18 @@ ci_load_config() {
     done < "$CI_CONF"
     [ "${#names[@]}" -gt 0 ] || { ci_error 'no instances configured'; return 1; }
     if [ "$CI_APP_SCOPE" = user ]; then ci_user_app_directory "$config_home" || return 1; fi
-    [ "$CI_LINKS" = none ] || [ "$CI_MODE" = original-copy ] || { ci_error 'links require original-copy mode (one managed copy)'; return 1; }
+    [ "$CI_LINKS" = none ] || [ "$CI_MODE" = original-copy ] || { ci_error 'links require original-copy mode'; return 1; }
+    if [ "$CI_LINKS" = claude-dev ]; then
+        if [ -z "$CI_LINKS_TARGET" ]; then
+            [ "${#names[@]}" -eq 1 ] || { ci_error 'with several copies, name the one that takes links: @links claude-dev <name>'; return 1; }
+            CI_LINKS_TARGET="$(ci_lower "${names[0]}")"
+        else
+            local linked=no
+            for a in "${!names[@]}"; do [ "$(ci_lower "${names[$a]}")" != "$CI_LINKS_TARGET" ] || linked=yes; done
+            [ "$linked" = yes ] || { ci_error 'links name an instance that is not configured'; return 1; }
+        fi
+    fi
     if [ "$CI_MODE" = original-copy ]; then
-        [ "${#names[@]}" -eq 1 ] || { ci_error 'original-copy mode requires exactly one managed copy'; return 1; }
         local stock_desktop stock_code
         stock_desktop="$(ci_canonical_dir "$HOME/Library/Application Support/Claude")" && stock_code="$(ci_canonical_dir "$HOME/.claude")" || return 1
         for a in "${!names[@]}"; do
@@ -217,6 +233,8 @@ ci_load_config() {
     done
     return 0
 }
+# True when the instance at this index takes the claude-dev:// links.
+ci_links_for() { [ "$CI_LINKS" = claude-dev ] && [ "$(ci_lower "${names[$1]}")" = "$CI_LINKS_TARGET" ]; }
 ci_app_path() { printf '%s/Claude %s.app\n' "$CI_APPS" "$1"; }
 ci_version() { "$CI_PB" -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null; }
 # 0=running, 1=not running, 2=unknown. Observation errors must stop mutations.
@@ -313,7 +331,7 @@ ci_integrity_binding() {
     result="$(
         {
             [ "$CI_APP_SCOPE" != user ] || printf '%s\0' MCD_USER_APPLICATIONS_1 "$CI_APPS"
-            [ "$CI_LINKS" = none ] || printf '%s\0' MCD_LINKS_1 "$CI_LINKS"
+            ! ci_links_for "$idx" || printf '%s\0' MCD_LINKS_1 "$CI_LINKS"
             printf '%s\0' "$policy" "${names[$idx]}" "${ids[$idx]}" "${dirs[$idx]}" "${code_dirs[$idx]}" "${hues[$idx]}"
         } | /usr/bin/shasum -a 256
     )" || return 1

@@ -1,18 +1,24 @@
-# Claude Duo
+# Claude Squad
 
-[![Security regression](https://github.com/guibrbs/claude-duo/actions/workflows/security-regression.yml/badge.svg)](https://github.com/guibrbs/claude-duo/actions/workflows/security-regression.yml)
+[![Security regression](https://github.com/guibrbs/claude-squad/actions/workflows/security-regression.yml/badge.svg)](https://github.com/guibrbs/claude-squad/actions/workflows/security-regression.yml)
 
-**Two Claude Desktop accounts on one Mac, side by side.** Keep the official
-**Claude** app signed in to one account and run **Claude Duo**, a managed copy,
-signed in to another: personal and work, two organizations, or two plans. Each
-app has its own account, its own Claude Code profile and its own Keychain item,
-and both can be open at the same time.
+**Several Claude Desktop accounts on one Mac, side by side.** Keep the official
+**Claude** app signed in to one account and run managed copies signed in to the
+others: **Claude Duo** for the second account, **Claude Trio** (or any name) for
+a third, and so on. Personal and work, several organizations, or several plans.
+Each app has its own account, its own Claude Code profile and its own Keychain
+item, and all of them can be open at the same time.
 
 > ⚠️ **Experimental and unofficial.** This is an independent project, not
-> affiliated with or endorsed by Anthropic. Claude Duo is a copy of the official
+> affiliated with or endorsed by Anthropic. Each copy is a copy of the official
 > app that is **signed locally**, without Anthropic's signature. Some scenarios
 > are still being validated (see [Limitations](#limitations)). Use it at your own
 > risk and follow the terms of use of each account and your organization's rules.
+
+**Names:** the project was called Claude Duo while it managed a single copy.
+The first copy keeps that name, and the installed paths keep their `claude-duo`
+names (`~/.local/share/claude-duo`, `claude-duo.conf`, the launch agent), so an
+existing installation goes on working without a migration.
 
 ## Why
 
@@ -20,7 +26,7 @@ Claude Desktop holds one account at a time. Switching means signing out and in,
 losing your place in Chat, Cowork and Code. Simply duplicating the app is not
 enough either: the copy reuses the original's encrypted storage and asks for
 your login Keychain password, and claude.ai treats a renamed copy as a web
-browser. Claude Duo handles those details and keeps the copy up to date.
+browser. Claude Squad handles those details and keeps the copies up to date.
 
 ## Quick start
 
@@ -28,11 +34,11 @@ Requirements: macOS 12 or later, the official Claude in `/Applications`, and the
 Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/guibrbs/claude-duo.git ~/claude-duo
+git clone https://github.com/guibrbs/claude-squad.git ~/claude-squad
 ```
 
 ```bash
-~/claude-duo/duo/install-duo.sh
+~/claude-squad/duo/install-duo.sh
 ```
 
 The installer:
@@ -40,13 +46,13 @@ The installer:
 1. checks the requirements;
 2. installs the versioned toolset (content-verified);
 3. writes the config to `~/.config/claude-instances/claude-duo.conf`;
-4. adds the **Update Claude Duo** app to `~/Applications`;
+4. adds the **Update Claude Squad** app to `~/Applications`;
 5. adds an hourly check that offers to update the Duo after Claude updates
    (skip it with `--no-auto-check`);
 6. builds the Duo. It **asks before quitting Claude**, because building needs
    both apps closed, and reopens Claude at the end. When the installer runs
    inside Claude (in the Code tab, for example), it does not build right away,
-   because that would end its own session: it opens **Update Claude Duo**,
+   because that would end its own session: it opens **Update Claude Squad**,
    which builds outside Claude.
 
 Then open **~/Applications/Claude Duo** and sign in with your second account.
@@ -56,8 +62,9 @@ Then open **~/Applications/Claude Duo** and sign in with your second account.
 - **Open:** `Claude Duo` from the Dock, Launchpad or Spotlight. The original is
   still your usual `Claude`.
 - **Update:** when the official Claude updates, a prompt asks *"Update now?"*.
-  You can also open **Update Claude Duo** at any time. Either way, both apps
-  quit, the Duo is rebuilt and verified, and whatever was open reopens.
+  You can also open **Update Claude Squad** at any time. Either way, Claude and
+  every copy quit, the copies are rebuilt and verified, and whatever was open
+  reopens.
   Prompts and notifications follow your macOS language (English or Portuguese).
 - **Previous versions:** every update keeps the previous Duo in
   `~/Applications/.claude-txn.*` and nothing prunes them, so they take up disk
@@ -77,8 +84,28 @@ Then open **~/Applications/Claude Duo** and sign in with your second account.
   Details in [docs/PROFILE_REUSE.md](docs/PROFILE_REUSE.md).
 
 ```bash
-/usr/bin/python3 -I ~/claude-duo/scripts/share-code-profile.py --apply --backup-existing
+/usr/bin/python3 -I ~/claude-squad/scripts/share-code-profile.py --apply --backup-existing
 ```
+
+For another copy, add `--account Trio`.
+
+## A third account (or more)
+
+Each extra account is one more copy, `Claude <name>`, with its own bundle id,
+Desktop profile, Code folder, Keychain item and icon color. Add it with the
+installer, which appends one line to the config and builds it:
+
+```bash
+~/claude-squad/duo/install-duo.sh --add Trio
+```
+
+The new line uses `~/Library/Application Support/Claude-Trio` and
+`~/.claude-trio`. Then open **~/Applications/Claude Trio** and sign in with
+the other account. **Update Claude Squad** and the hourly check cover every
+copy: an update quits Claude and all copies, rebuilds them and reopens what was
+open. `claude-dev://` links (`--links`) go to one copy only, the Duo by
+default; the config names it (`@links claude-dev Duo`). To remove just one
+copy, run `uninstall-duo.sh --only Trio`.
 
 ## Claude Code in the terminal for the Duo's account (loop-duo, duo-send)
 
@@ -101,11 +128,12 @@ With both Code accounts on this Mac, one can develop and the other review in
 the same repository, round after round, until the reviewer approves:
 
 ```bash
-/usr/bin/python3 -I ~/claude-duo/duo/loop-duo.py run "goal" --repo ~/path/to/repo
+/usr/bin/python3 -I ~/claude-squad/duo/loop-duo.py run "goal" --repo ~/path/to/repo
 ```
 
 - **Roles:** by default the original account develops and the Duo's reviews.
-  To swap them, use `--dev duo --reviewer original`.
+  To swap them, use `--dev duo --reviewer original`. Any copy works the
+  same way: `--dev trio --reviewer duo`.
 - **Branch:** the work goes to a `loop-duo/<goal>-<id>` branch, created from
   HEAD in a worktree of its own. The reviewer runs without the edit tools,
   and a reviewer turn that changes the branch anyway does not count. Untracked
@@ -127,8 +155,8 @@ The original Claude Code, or you in a terminal, can give a task to the Duo's
 account, in a repository you name:
 
 ```bash
-/usr/bin/python3 -I ~/claude-duo/duo/duo-send.py send "task" --repo ~/path/to/repo
-/usr/bin/python3 -I ~/claude-duo/duo/duo-send.py send "task" --repo ~/path/to/repo --bg
+/usr/bin/python3 -I ~/claude-squad/duo/duo-send.py send "task" --repo ~/path/to/repo
+/usr/bin/python3 -I ~/claude-squad/duo/duo-send.py send "task" --repo ~/path/to/repo --bg
 ```
 
 - **Synchronous (default):** `claude -p` on the Duo's account; prints the
@@ -141,6 +169,8 @@ account, in a repository you name:
   tasks the original Claude sends, does them where you can watch, and reports
   back. `duo-send.py inbox --open --repo …` opens one (press Enter there).
   Details in [docs/DUO_INBOX.md](docs/DUO_INBOX.md).
+- **Another copy:** every command takes `--to trio` (or the name of any copy
+  in the config) to reach that account instead of the Duo's.
 - **Talk to a session open in the Duo window:** `duo-send.py sessions` lists
   the Duo's open sessions with their `uds:/tmp/cc-socks/<pid>.sock` address;
   the original Claude's `SendMessage` to that address reaches the session, and
@@ -197,34 +227,42 @@ Details: [docs/DUO_SEND.md](docs/DUO_SEND.md).
 
 ## Uninstall
 
-Quit Claude Duo and run:
+Quit Claude Duo (and any other copy) and run:
 
 ```bash
-~/claude-duo/duo/uninstall-duo.sh
+~/claude-squad/duo/uninstall-duo.sh
 ```
 
 The script shows the list and asks for confirmation. It then turns off the
 update check and moves everything into one folder in the Trash, deleting
 nothing:
 
-- `~/Applications/Claude Duo.app` and `~/Applications/Update Claude Duo.app`
-  (and the earlier `Atualizar Claude Duo.app`, if it is still there);
+- `~/Applications/Claude Duo.app`, every other copy the config lists
+  (`Claude Trio.app`…) and `~/Applications/Update Claude Squad.app`
+  (and the earlier `Update Claude Duo.app` and `Atualizar Claude Duo.app`, if
+  they are still there);
 - the update check, in `~/Library/LaunchAgents/io.github.guibrbs.claude-duo.update-check.plist`;
-- the Duo tools, in `~/.local/share/claude-duo`, and the config, in
+- the Claude Squad tools, in `~/.local/share/claude-duo`, and the config, in
   `~/.config/claude-instances/claude-duo.conf`;
 - the logs, in `~/Library/Logs/Claude Duo Updater`;
 - the toolset, in `~/.local/share/claude-instances`, and the previous
   versions, in `~/Applications/.claude-txn.*`. These two stay while another
   config in `~/.config/claude-instances` still uses them.
 
-The Duo account's data stays unless you run it with `--include-account-data`.
-That moves the Desktop and Code profiles the config's Duo line names, by default
+The accounts' data stays unless you run it with `--include-account-data`.
+That moves the Desktop and Code profiles each copy's line names, for the Duo by default
 `~/Library/Application Support/Claude-Duo` and `~/.claude-duo`. It never moves
 a folder outside the profile locations the toolset accepts for the Duo, such as
 the original's. If you
 used Code sharing, the shared items inside `~/.claude-duo` are links: moving
 them does not affect the originals in `~/.claude`. The `Duo Claude Safe
-Storage` item stays in the Keychain; delete it in Keychain Access if you want.
+Storage` item (and `Trio Claude Safe Storage`, for each copy) stays in the
+Keychain; delete it in Keychain Access if you want.
+
+`--only Trio` removes a single copy instead: its app (and, with
+`--include-account-data`, its profiles) go to the Trash, and its line leaves
+the config, together with `@links` when it names that copy. The Duo, the
+updater and the tools stay.
 
 ## Development
 

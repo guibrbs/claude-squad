@@ -71,8 +71,8 @@ instance configuration. The source app is never a rebuild destination.
 **Legacy installations:** a `Claude Personal.app` copy may share the original's
 default profile. Do not run that legacy copy and the original together. Review
 the transition before changing existing configuration, shortcuts or apps. The
-explicit `@mode original-copy` policy now reserves the defaults and requires
-exactly one managed copy. Headerless configs retain the older deployment.
+explicit `@mode original-copy` policy now reserves the defaults for the
+original; it accepts one or more managed copies. Headerless configs retain the older deployment.
 
 ```bash
 claude-instance-check.sh      # health check

@@ -73,8 +73,10 @@ person using Claude to interact with the Claude Code CLI.
 - Compare launchers in the watchdog and return failure for missing apps or
   unknown process state. Pass notification text as AppleScript arguments.
 - Validate icon hue, including finite Swift numbers.
-- Support explicit `@mode original-copy`: exactly one copy, with both default
-  Desktop/Code paths reserved for the original, including physical/case aliases.
+- Support explicit `@mode original-copy`: one or more copies (Duo, Trio…),
+  each with its own bundle id, product name and Desktop/Code pair, and both
+  default Desktop/Code paths reserved for the original, including
+  physical/case aliases. Adding a copy leaves the other copies' records valid.
   Policy changes affect the expected launcher and content-record binding.
   Headerless configs preserve the legacy policy until reviewed transition.
 - Support opt-in `@apps user` for a pre-existing private, physical, owned
@@ -128,11 +130,13 @@ locks are per selected app directory, not cross-directory profile locks. Use one
 reviewed configuration/location per deployment. See the
 [GUI validation plan](docs/GUI_VALIDATION.md).
 
-`@links claude-dev` (once, before instance rows, `original-copy` mode only)
-gives the single managed copy one URL type, `Claude <name> links` with the
+`@links claude-dev [name]` (once, before instance rows, `original-copy` mode
+only) gives one managed copy one URL type, `Claude <name> links` with the
 `claude-dev` scheme, in place of the deleted `claude://` types. Any other value
-is refused, and `@links none` is the default. The integrity record expects
-exactly that entry, and the links setting is part of the config binding, so
+is refused, and `@links none` is the default. LaunchServices hands a scheme
+to one app, so with several copies the line must name the copy that takes the
+links (`@links claude-dev Duo`); with one copy the name is optional. The other
+copies get no URL type. The integrity record expects exactly that entry, and the links setting is part of the config binding, so
 turning it on or off requires a rebuild (`duo/install-duo.sh --links` turns
 it on). See
 [DUO_VISIBLE_SESSION.md](docs/DUO_VISIBLE_SESSION.md).

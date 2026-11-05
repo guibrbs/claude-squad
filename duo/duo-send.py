@@ -2,7 +2,9 @@
 """duo-send: the original Claude Code hands a task to the Duo's account.
 
 "duo" is the CLAUDE_CONFIG_DIR of the Duo line in the installed config (default
-~/.claude-duo), the same account loop-duo uses. Two ways to send:
+~/.claude-duo), the same account loop-duo uses. `--to NAME` picks another
+managed copy of the config instead (`--to trio`); every command takes it.
+Two ways to send:
 
 - synchronous (default): `claude -p` on the Duo's account, in the repository;
   waits and prints the answer, like a subagent on the other account.
@@ -19,8 +21,8 @@ does them in the Duo window and reports back. `whois` tells which account's
 session answers on an address, so the inbox only takes work from known senders.
 
 `open` (and `send --open`) shows a session in the Claude Duo window through a
-claude-dev:// link, which the Duo registers when its config has
-`@links claude-dev`: a new Code session with the folder and the prompt filled
+claude-dev:// link, which the copy registers when the config's `@links
+claude-dev` line names it (or names nothing, with one copy): a new Code session with the folder and the prompt filled
 in, or a session duo-send ran, imported by its id.
 
 The account, its environment and the `claude -p` turn come from loop-duo.py,
@@ -68,7 +70,7 @@ BUNDLE_ID = re.compile(r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 PROMPT_LIMIT = 4000  # A link is visible in process listings; long briefs go through `send`.
 
 ROLE_SYNC = """\
-You are running on the Claude Duo account, the second Claude Code account of this Mac. The original account
+You are running on the Claude {name} account, one of the Claude Code accounts of this Mac. The original account
 sent you this task with duo-send and is waiting for your final answer, which goes back to it as a tool result.
 - Nobody can answer you during this turn: there is no AskUserQuestion here. When the task needs a decision only
   a person can make (access, credentials, spending, something outside the repository), stop and say exactly
@@ -78,7 +80,7 @@ sent you this task with duo-send and is waiting for your final answer, which goe
 """
 
 ROLE_BG = """\
-You are running on the Claude Duo account, the second Claude Code account of this Mac. The original account
+You are running on the Claude {name} account, one of the Claude Code accounts of this Mac. The original account
 started you as a background session with duo-send. The user follows this session with `claude agents` and can
 attach to it to answer questions.
 - Do not merge, push to the default branch or change settings and permissions.
@@ -96,13 +98,13 @@ def is_socket(path):
         return False
 
 
-def open_duo_sessions(match=None, *, include_stale=False):
-    """The Duo's sessions from its registry (<config>/sessions/<pid>.json), with their SendMessage address.
+def open_duo_sessions(match=None, *, include_stale=False, to="duo"):
+    """The copy's sessions from its registry (<config>/sessions/<pid>.json), with their SendMessage address.
 
     The address is the session's messaging socket; it changes when the session's
     process restarts, so it is read right before sending, never kept.
     """
-    return registry_sessions(duo()["folder"], match, include_stale=include_stale)
+    return registry_sessions(duo(to)["folder"], match, include_stale=include_stale)
 
 
 def registry_sessions(config, match=None, *, include_stale=False):
@@ -131,23 +133,24 @@ INBOX = "Duo inbox"
 INBOX_SKILL = "/duo-inbox"
 
 
-def inbox_address(folder=None):
-    """The address of the one live Duo inbox session working in `folder` (default: the current folder)."""
-    where = repository(folder)
-    found = [item for item in open_duo_sessions(INBOX)
+def inbox_address(folder=None, to="duo"):
+    """The address of the one live inbox session of the copy working in `folder` (default: the current folder)."""
+    where, name = repository(folder), duo(to)["name"]
+    found = [item for item in open_duo_sessions(INBOX, to=to)
              if item.get("cwd") and Path(str(item["cwd"])).resolve() == where]
     if not found:
-        raise Refused(f"no Duo inbox is open for {where}; open one with  duo-send.py inbox --open --repo "
-                      f"{shlex.quote(str(where))}  and press Enter in the Claude Duo window")
+        option = "" if str(to).lower() == "duo" else f" --to {shlex.quote(str(to))}"
+        raise Refused(f"no {name} inbox is open for {where}; open one with  duo-send.py inbox --open{option} --repo "
+                      f"{shlex.quote(str(where))}  and press Enter in the Claude {name} window")
     if len(found) > 1:
-        raise Refused(f"more than one Duo inbox is open for {where}: " + "; ".join(i["name"] for i in found)
-                      + "; close the extra ones in the Claude Duo window")
+        raise Refused(f"more than one {name} inbox is open for {where}: " + "; ".join(i["name"] for i in found)
+                      + f"; close the extra ones in the Claude {name} window")
     return found[0]
 
 
-def open_inbox(folder=None):
-    """A new Code session in the Duo window for `folder`, with /duo-inbox filled in for the user to send."""
-    return open_session(folder=str(repository(folder)), prompt=INBOX_SKILL)
+def open_inbox(folder=None, to="duo"):
+    """A new Code session in the copy's window for `folder`, with /duo-inbox filled in for the user to send."""
+    return open_session(folder=str(repository(folder)), prompt=INBOX_SKILL, to=to)
 
 
 def whois(address):
@@ -155,68 +158,76 @@ def whois(address):
     socket_path = address[4:] if address.startswith("uds:") else address
     if not SOCKET.match(socket_path):
         raise Refused(f"not a session address: {address!r}")
-    for account in ("original", "duo"):
-        config = loop.account(account)["folder"] if account == "original" else duo()["folder"]
-        for item in registry_sessions(config):
+    for account in loop.account_ids():
+        config = loop.account(account)["folder"]
+        for item in registry_sessions(config) if config.is_dir() else []:
             if item["address"] == f"uds:{socket_path}":
                 return {"account": account, **item}
-    raise Refused(f"no live session of either account answers on {address}")
+    raise Refused(f"no live session of any account answers on {address}")
 
 
-def duo():
-    acct = loop.account("duo")
+def duo(to="duo"):
+    """The copy's account ({id, name, folder}); duo-send never targets the original."""
+    if str(to).lower() == "original":
+        raise Refused("duo-send hands work from the original to a copy; --to names a copy (duo, trio...)")
+    acct = loop.account(to)
     if not acct["folder"].is_dir():
-        raise Refused(f"the Duo account has no Code folder yet ({acct['folder']}); open Code in Claude Duo once")
+        raise Refused(f"the {acct['name']} account has no Code folder yet ({acct['folder']}); "
+                      f"open Code in Claude {acct['name']} once")
     return acct
 
 
-def duo_app():
-    """The Duo's bundle id from the installed config, which must have `@links claude-dev`."""
-    pointer = loop.DUO_HOME / "config-path"
-    config = Path(pointer.read_text(encoding="utf-8").strip()) if pointer.is_file() and not pointer.is_symlink() else None
-    if not config or config.parent != loop.CONFIGS or config.suffix != ".conf" or not config.is_file() or config.is_symlink():
-        raise Refused("Claude Duo is not installed (no config); run duo/install-duo.sh")
-    links, bundle = None, None
+def duo_app(to="duo"):
+    """The copy's bundle id; the config's `@links claude-dev` line must give the links to that copy."""
+    config = loop.installed_config()
+    if not config:
+        raise Refused("Claude Squad is not installed (no config); run duo/install-duo.sh")
+    acct, found = loop.account(to), loop.copies()
+    links = None
     for line in config.read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()
         if line.startswith("@links"):
             links = line.split(None, 1)[1].strip() if len(line.split(None, 1)) == 2 else ""
-        fields = [field.strip() for field in line.split("|")]
-        if fields[0] == "Duo" and len(fields) > 1:
-            bundle = fields[1]
-    if links != SCHEME:
-        raise Refused(f"the Duo does not take links yet ({config} has no `@links {SCHEME}`): run "
+    scheme, _, target = (links or "").partition(" ")
+    if scheme != SCHEME:
+        raise Refused(f"the {acct['name']} does not take links yet ({config} has no `@links {SCHEME}`): run "
                       "duo/install-duo.sh --links from an up-to-date checkout (see docs/DUO_VISIBLE_SESSION.md)")
+    target = target.strip().lower() or (next(iter(found)) if len(found) == 1 else "")
+    if target != acct["id"]:
+        owner = f"Claude {found[target]['name']}" if target in found else "another copy"
+        raise Refused(f"Claude {acct['name']} does not take links: the config gives claude-dev:// to {owner} "
+                      f"(`@links {SCHEME} <name>` in {config}), and only one app can have it")
+    bundle = found[acct["id"]]["bundle"]
     if not bundle or not BUNDLE_ID.match(bundle):
-        raise Refused(f"no valid Duo line in {config}")
+        raise Refused(f"no valid {acct['name']} line in {config}")
     return bundle
 
 
-def open_link(path, params):
-    """Hands a claude-dev:// link to the Duo app by bundle id; returns the link."""
-    bundle = duo_app()
+def open_link(path, params, to="duo"):
+    """Hands a claude-dev:// link to the copy's app by bundle id; returns the link."""
+    bundle = duo_app(to)
     link = f"{SCHEME}://{path}?" + urllib.parse.urlencode([*params, ("source", "duo-send")], quote_via=urllib.parse.quote)
     done = subprocess.run([OPEN, "-b", bundle, link], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
     if done.returncode != 0:
-        raise Refused(f"open did not reach the Duo: {(done.stderr or done.stdout).strip()[:300]}")
+        raise Refused(f"open did not reach Claude {loop.account(to)['name']}: {(done.stderr or done.stdout).strip()[:300]}")
     return link
 
 
-def open_session(*, folder=None, prompt=None, session=None):
+def open_session(*, folder=None, prompt=None, session=None, to="duo"):
     """A new Code session in the Duo window (folder, prompt filled in), or a CLI session imported by id."""
     if session is not None:
         if folder or prompt:
             raise Refused("--session opens an existing session; leave out --repo and --prompt")
         if not UUID.match(session):
             raise Refused(f"invalid session id (the Duo imports a full UUID): {session!r}")
-        return {"ok": True, "link": open_link("resume", [("session", session)])}
+        return {"ok": True, "link": open_link("resume", [("session", session)], to)}
     if prompt and len(prompt) > PROMPT_LIMIT:
         raise Refused(f"the prompt is longer than {PROMPT_LIMIT} characters: write the brief to a file in the "
                       "repository and open with a short prompt that points to it, or use `send --open`")
     params = [("folder", str(repository(folder)))]
     if prompt and prompt.strip():
         params.append(("q", prompt))
-    return {"ok": True, "link": open_link("code/new", params)}
+    return {"ok": True, "link": open_link("code/new", params, to)}
 
 
 def repository(folder):
@@ -245,41 +256,41 @@ def follow_up(acct, command, target=None):
     return f"{prefix} {shlex.quote(target)}" if target else prefix
 
 
-def send_sync(task, *, folder=None, model=None, permission="auto", cost_max=None, session=None, say=print):
-    """One `claude -p` turn on the Duo's account; returns {ok, session, cost_usd, answer, error}."""
+def send_sync(task, *, folder=None, model=None, permission="auto", cost_max=None, session=None, say=print, to="duo"):
+    """One `claude -p` turn on the copy's account; returns {ok, session, cost_usd, answer, error}."""
     check_options(task, model=model, name=None, session=session, cost_max=cost_max)
-    acct, where = duo(), repository(folder)
+    acct, where = duo(to), repository(folder)
     loop.require_signed_in(acct)
     extra = ["--max-budget-usd", f"{cost_max:.2f}"] if cost_max is not None else []
-    end = loop.converse(acct, session, task, folder=where, role_prompt=ROLE_SYNC, reviewer=False, model=model,
-                        permission=permission, extra=extra,
-                        on_tool=lambda tool, data: say(f"  · duo {tool}: {loop.tool_summary(tool, data)}"))
-    return {"mode": "sync", "account": "duo", "repo": str(where), **end}
+    end = loop.converse(acct, session, task, folder=where, role_prompt=ROLE_SYNC.format(name=acct["name"]),
+                        reviewer=False, model=model, permission=permission, extra=extra,
+                        on_tool=lambda tool, data: say(f"  · {acct['id']} {tool}: {loop.tool_summary(tool, data)}"))
+    return {"mode": "sync", "account": acct["id"], "repo": str(where), **end}
 
 
-def send_background(task, *, folder=None, model=None, permission="auto", name=None, session=None):
-    """Starts a `claude --bg` session on the Duo's account; returns its id and the follow-up commands."""
+def send_background(task, *, folder=None, model=None, permission="auto", name=None, session=None, to="duo"):
+    """Starts a `claude --bg` session on the copy's account; returns its id and the follow-up commands."""
     check_options(task, model=model, name=name, session=session, cost_max=None)
-    acct, where = duo(), repository(folder)
+    acct, where = duo(to), repository(folder)
     loop.require_signed_in(acct)
     argv = [loop.claude_bin(), "--bg", *(["--resume", session] if session else []),
             *(["--name", name] if name else []), *(["--model", model] if model else []),
-            "--permission-mode", permission, "--append-system-prompt", ROLE_BG, task]
+            "--permission-mode", permission, "--append-system-prompt", ROLE_BG.format(name=acct["name"]), task]
     started = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
                              stdin=subprocess.DEVNULL, env=loop.environment(acct), cwd=where, timeout=120)
     output = (started.stdout or "") + (started.stderr or "")
     found = BACKGROUND_ID.search(output)
     if started.returncode != 0 or not found:
-        return {"mode": "bg", "account": "duo", "repo": str(where), "ok": False, "id": None,
+        return {"mode": "bg", "account": acct["id"], "repo": str(where), "ok": False, "id": None,
                 "error": output.strip()[-400:] or f"exited with code {started.returncode}"}
     agent_id = found.group(1)
-    return {"mode": "bg", "account": "duo", "repo": str(where), "ok": True, "id": agent_id, "error": None,
+    return {"mode": "bg", "account": acct["id"], "repo": str(where), "ok": True, "id": agent_id, "error": None,
             "commands": {verb: follow_up(acct, verb, None if verb == "agents" else agent_id) for verb in FOLLOW_UP}}
 
 
-def run_follow_up(verb, target=None, *, all_sessions=False):
-    """`claude agents|logs|stop|attach` on the Duo's account: the original's would list its own sessions."""
-    acct = duo()
+def run_follow_up(verb, target=None, *, all_sessions=False, to="duo"):
+    """`claude agents|logs|stop|attach` on the copy's account: the original's would list its own sessions."""
+    acct = duo(to)
     argv = [loop.claude_bin(), verb]
     if verb == "agents":
         argv += ["--json", *(["--all"] if all_sessions else [])]  # the plain list needs a terminal
@@ -304,7 +315,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="duo-send", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    send = commands.add_parser("send", help="hands a task to the Duo's account")
+    target = argparse.ArgumentParser(add_help=False)
+    target.add_argument("--to", default="duo", metavar="NAME",
+                        help="the copy whose account this reaches: duo (default), trio or another in the config")
+    send = commands.add_parser("send", parents=[target], help="hands a task to the Duo's account")
     send.add_argument("task", help='the task; "-" reads it from standard input')
     send.add_argument("--repo", help="the folder the Duo works in (default: the current folder)")
     send.add_argument("--bg", action="store_true", help="starts a background session and returns its id")
@@ -315,17 +329,17 @@ def main(argv=None):
     send.add_argument("--max-cost", type=float, help="spending ceiling in US$ (synchronous mode only)")
     send.add_argument("--open", action="store_true", help="afterwards, opens the session in the Claude Duo window")
     send.add_argument("--json", action="store_true")
-    opening = commands.add_parser("open", help="opens a session in the Claude Duo window (needs @links claude-dev)")
+    opening = commands.add_parser("open", parents=[target], help="opens a session in the Claude Duo window (needs @links claude-dev)")
     opening.add_argument("--repo", help="folder of the new session (default: the current folder)")
     opening.add_argument("--prompt", help='text filled in, not sent; "-" reads it from standard input')
     opening.add_argument("--session", help="imports this session id (a UUID) instead of starting a new one")
-    sessions = commands.add_parser("sessions", help="lists the Duo's open sessions with their SendMessage address")
+    sessions = commands.add_parser("sessions", parents=[target], help="lists the Duo's open sessions with their SendMessage address")
     sessions.add_argument("match", nargs="?", help="only sessions whose name contains this text")
     sessions.add_argument("--address", action="store_true",
                           help="prints only the address; exactly one session must match")
     sessions.add_argument("--all", action="store_true", help="also sessions whose process or socket is gone")
     sessions.add_argument("--json", action="store_true")
-    inbox = commands.add_parser("inbox", help="the address of the Duo inbox session for a folder")
+    inbox = commands.add_parser("inbox", parents=[target], help="the address of the Duo inbox session for a folder")
     inbox.add_argument("--repo", help="the folder the inbox works in (default: the current folder)")
     inbox.add_argument("--open", action="store_true",
                        help="opens a new inbox in the Claude Duo window, with /duo-inbox filled in")
@@ -333,26 +347,29 @@ def main(argv=None):
     who = commands.add_parser("whois", help="which account's session answers on an address")
     who.add_argument("address", help="uds:/tmp/cc-socks/<pid>.sock, as a message's `from` shows it")
     who.add_argument("--json", action="store_true")
-    agents = commands.add_parser("agents", help="lists the Duo's background sessions (JSON)")
+    agents = commands.add_parser("agents", parents=[target], help="lists the Duo's background sessions (JSON)")
     agents.add_argument("--all", action="store_true", help="also the finished ones")
     for verb, text in (("logs", "prints a Duo background session's recent output"),
                        ("stop", "stops a Duo background session"),
                        ("attach", "opens a Duo background session in this terminal")):
-        commands.add_parser(verb, help=text).add_argument("session", help="the id (or part of the name)")
+        commands.add_parser(verb, parents=[target], help=text).add_argument("session", help="the id (or part of the name)")
     args = parser.parse_args(argv)
 
+    to = getattr(args, "to", "duo")
     try:
+        label = (loop.account(to)["name"] if args.command == "open" else
+                 None if args.command == "whois" else duo(to)["name"])
         if args.command == "open":
             prompt = sys.stdin.read() if args.prompt == "-" else args.prompt
-            result = open_session(folder=args.repo, prompt=prompt, session=args.session)
-            print(f"opened in Claude Duo: {result['link'].split('?')[0]}")
+            result = open_session(folder=args.repo, prompt=prompt, session=args.session, to=to)
+            print(f"opened in Claude {label}: {result['link'].split('?')[0]}")
             return 0
         if args.command == "inbox":
             if args.open:
-                link = open_inbox(args.repo)["link"]
-                print(f"opened in Claude Duo: {link.split('?')[0]}; press Enter there to send {INBOX_SKILL}")
+                link = open_inbox(args.repo, to)["link"]
+                print(f"opened in Claude {label}: {link.split('?')[0]}; press Enter there to send {INBOX_SKILL}")
                 return 0
-            found = inbox_address(args.repo)
+            found = inbox_address(args.repo, to)
             print(json.dumps(found, ensure_ascii=False, indent=2) if args.json else found["address"])
             return 0
         if args.command == "whois":
@@ -361,10 +378,10 @@ def main(argv=None):
                   else f"{found['account']}: {found['name']} ({found.get('cwd')})")
             return 0
         if args.command == "sessions":
-            found = open_duo_sessions(args.match, include_stale=args.all and not args.address)
+            found = open_duo_sessions(args.match, include_stale=args.all and not args.address, to=to)
             if args.address:
                 if len(found) != 1:
-                    raise Refused((f"{len(found)} open Duo sessions match {args.match!r}" if args.match else
+                    raise Refused((f"{len(found)} open {label} sessions match {args.match!r}" if args.match else
                                    "--address needs a name to match") + (": " + "; ".join(f["name"] for f in found)
                                                                           if found else ""))
                 print(found[0]["address"])
@@ -374,13 +391,13 @@ def main(argv=None):
                 for item in found:
                     print(f"{item['status'] or '?':<6} {item['address'] or '(gone)':<28} {item['name']}")
                 if not found:
-                    print("No open Duo sessions" + (f" match {args.match!r}." if args.match else "."))
+                    print(f"No open {label} sessions" + (f" match {args.match!r}." if args.match else "."))
             return 0
         if args.command != "send":
-            return run_follow_up(args.command, getattr(args, "session", None), all_sessions=getattr(args, "all", False))
+            return run_follow_up(args.command, getattr(args, "session", None), all_sessions=getattr(args, "all", False), to=to)
         task = sys.stdin.read() if args.task == "-" else args.task
         if args.open:
-            duo_app()  # refuses before any work when the Duo takes no links
+            duo_app(to)  # refuses before any work when the copy takes no links
         if args.bg:
             if args.open:
                 raise Refused("--open needs the session to finish first; with --bg, open it later with "
@@ -388,16 +405,16 @@ def main(argv=None):
             if args.max_cost is not None:
                 raise Refused("--max-cost works only in the synchronous mode: claude enforces it with -p alone")
             result = send_background(task, folder=args.repo, model=args.model, permission=args.permission,
-                                     name=args.name, session=args.resume)
+                                     name=args.name, session=args.resume, to=to)
         else:
             if args.name:
                 raise Refused("--name names a background session; use it with --bg")
             say = (lambda text: None) if args.json else (lambda text: print(text, file=sys.stderr))
             result = send_sync(task, folder=args.repo, model=args.model, permission=args.permission,
-                               cost_max=args.max_cost, session=args.resume, say=say)
+                               cost_max=args.max_cost, session=args.resume, say=say, to=to)
             if args.open and result["ok"] and result.get("session"):
                 try:
-                    result["opened"] = open_session(session=result["session"])["link"]
+                    result["opened"] = open_session(session=result["session"], to=to)["link"]
                 except Refused as error:
                     result["open_error"] = str(error)
     except Refused as error:
@@ -413,16 +430,16 @@ def main(argv=None):
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif not result["ok"]:
-        print(f"duo-send: the Duo account did not answer: {result['error']}", file=sys.stderr)
+        print(f"duo-send: the {label} account did not answer: {result['error']}", file=sys.stderr)
     elif result["mode"] == "bg":
-        print(f"started on the Duo account · {result['id']} · {result['repo']}")
+        print(f"started on the {label} account · {result['id']} · {result['repo']}")
         for verb in FOLLOW_UP:
             print(f"  {result['commands'][verb]}")
     else:
         print(result["answer"])
         if result.get("opened") or result.get("open_error"):
-            print(f"[duo · {'opened in Claude Duo' if result.get('opened') else result['open_error']}]", file=sys.stderr)
-        print(f"\n[duo · session {result['session']} · US$ {result['cost_usd'] or 0:.2f} estimated]", file=sys.stderr)
+            print(f"[{result['account']} · {f'opened in Claude {label}' if result.get('opened') else result['open_error']}]", file=sys.stderr)
+        print(f"\n[{result['account']} · session {result['session']} · US$ {result['cost_usd'] or 0:.2f} estimated]", file=sys.stderr)
     return 0 if result["ok"] else 1
 
 

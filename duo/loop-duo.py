@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""loop-duo: the two Claude Code accounts of this Mac work on one repository.
+"""loop-duo: two Claude Code accounts of this Mac work on one repository.
 
 One account develops and the other reviews, round after round, until the
-reviewer approves the goal. "original" is ~/.claude; "duo" is the
-CLAUDE_CONFIG_DIR of the Duo line in the installed config (default
-~/.claude-duo). Every answer ends with a ```loop-duo JSON block that tells this
+reviewer approves the goal. "original" is ~/.claude; every managed copy in the
+installed config is an account named after it ("duo", "trio"...), whose
+folder is the CLAUDE_CONFIG_DIR of its line (~/.claude-duo when there is no
+config). Every answer ends with a ```loop-duo JSON block that tells this
 script what comes next. claude -p offers no AskUserQuestion, so a question one
 agent would ask the user becomes a "question" block, answered by the other.
 
@@ -36,7 +37,7 @@ HOME = Path.home()
 DUO_HOME = HOME / ".local/share/claude-duo"
 LOOPS = DUO_HOME / "loops"
 CONFIGS = HOME / ".config/claude-instances"
-ACCOUNTS = ("original", "duo")
+COPY_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 LEVELS = ("local", "pr")  # No merge level on purpose: a person merges.
 # bypassPermissions is left out: the loop runs unattended.
 PERMISSION_MODES = ("auto", "acceptEdits", "manual", "dontAsk", "plan")
@@ -141,25 +142,50 @@ def read_json(path):
 # ---------------------------------------------------------------- accounts
 
 
-def duo_config_dir():
-    """The Duo's CLAUDE_CONFIG_DIR from the installed config; ~/.claude-duo when it says nothing."""
+def installed_config():
+    """The config the Duo installer pointed at, or None."""
     pointer = DUO_HOME / "config-path"
     if pointer.is_file() and not pointer.is_symlink():
         config = Path(pointer.read_text(encoding="utf-8").strip())
         if config.parent == CONFIGS and config.suffix == ".conf" and config.is_file() and not config.is_symlink():
-            for line in config.read_text(encoding="utf-8").splitlines():
-                fields = [field.strip() for field in line.split("|")]
-                if fields[0] != "Duo":
-                    continue
-                for field in fields[4:]:
-                    if field.startswith("CLAUDE_CONFIG_DIR="):
-                        return Path(field.split("=", 1)[1]).expanduser()
-    return HOME / ".claude-duo"
+            return config
+    return None
+
+
+def copies():
+    """The managed copies of the installed config, in its order: {account id: {name, bundle, folder}}.
+
+    The id is the copy's name in lowercase. A line without CLAUDE_CONFIG_DIR has
+    no Code folder of its own and is left out. Without a config, the Duo at
+    ~/.claude-duo.
+    """
+    found = {}
+    config = installed_config()
+    for line in config.read_text(encoding="utf-8").splitlines() if config else []:
+        line = line.split("#", 1)[0].strip()
+        fields = [field.strip() for field in line.split("|")]
+        if not line or line.startswith("@") or len(fields) < 2 or not COPY_NAME.match(fields[0]):
+            continue
+        for pair in (pair.strip() for field in fields[4:5] for pair in field.split(";")):
+            if pair.startswith("CLAUDE_CONFIG_DIR="):
+                found.setdefault(fields[0].lower(), {"name": fields[0], "bundle": fields[1],
+                                                     "folder": Path(pair.split("=", 1)[1].strip()).expanduser()})
+    return found or {"duo": {"name": "Duo", "bundle": None, "folder": HOME / ".claude-duo"}}
+
+
+def account_ids():
+    return ("original", *copies())
 
 
 def account(name):
-    folder = HOME / ".claude" if name == "original" else duo_config_dir()
-    return {"id": name, "folder": folder}
+    """{id, name, folder} of "original" or of a copy; unknown names are refused with the known ones."""
+    key = str(name).lower()
+    if key == "original":
+        return {"id": "original", "name": "original", "folder": HOME / ".claude"}
+    found = copies()
+    if key not in found:
+        raise Refused(f"unknown account {name!r}; this Mac has: {', '.join(account_ids())}")
+    return {"id": key, "name": found[key]["name"], "folder": found[key]["folder"]}
 
 
 def environment(acct):
@@ -392,7 +418,7 @@ def open_pr(state, summary, verdict):
     title = state["goal"].strip().splitlines()[0][:72]
     body = (f"## Goal\n\n{state['goal'].strip()}\n\n## What was done\n\n{summary.strip()}\n\n"
             f"## Review ({state['reviewer']})\n\n{verdict.strip()}\n\n"
-            f"Made by Claude Duo's loop-duo: the {state['dev']} account developed and the {state['reviewer']} "
+            f"Made by Claude Squad's loop-duo: the {state['dev']} account developed and the {state['reviewer']} "
             f"account reviewed, in {state['round']} round(s). A person still has to review it before merging.\n\n"
             "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n")
     args = [gh_bin(), "pr", "create", "--draft", "--head", area["branch"], "--title", title, "--body", body]
@@ -409,9 +435,10 @@ def open_pr(state, summary, verdict):
 
 def run_loop(goal, *, dev="original", reviewer="duo", folder=None, worktree=True, rounds=6, until="local",
              cost_max=None, model_dev=None, model_reviewer=None, permission="auto", say=print):
-    if dev == reviewer:
-        raise Refused("the developer and the reviewer must be different accounts")
     accounts = {"dev": account(dev), "reviewer": account(reviewer)}
+    if accounts["dev"]["id"] == accounts["reviewer"]["id"]:
+        raise Refused("the developer and the reviewer must be different accounts")
+    dev, reviewer = accounts["dev"]["id"], accounts["reviewer"]["id"]
     for acct in accounts.values():
         if not acct["folder"].is_dir():
             raise Refused(f"the {acct['id']} account has no Code folder yet ({acct['folder']}); "
@@ -621,8 +648,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="runs a loop until the reviewer approves or a ceiling stops it")
     run.add_argument("goal", help='the loop goal; "-" reads it from standard input')
-    run.add_argument("--dev", choices=ACCOUNTS, default="original")
-    run.add_argument("--reviewer", choices=ACCOUNTS, default="duo")
+    run.add_argument("--dev", default="original", help="original, duo or another copy in the config (default: original)")
+    run.add_argument("--reviewer", default="duo", help="original, duo or another copy in the config (default: duo)")
     run.add_argument("--repo", help="the repository (default: the current folder)")
     run.add_argument("--no-worktree", action="store_true", help="creates the branch in the folder itself, without a worktree")
     run.add_argument("--rounds", type=int, default=6)

@@ -7,11 +7,11 @@ Duo window. `duo-send.py open` puts it on the Duo's screen, through a
 
 ```bash
 # a new Code session in the Duo window, folder chosen, prompt filled in (not sent):
-/usr/bin/python3 -I ~/claude-duo/duo/duo-send.py open --repo ~/path/to/repo --prompt "task"
+/usr/bin/python3 -I ~/claude-squad/duo/duo-send.py open --repo ~/path/to/repo --prompt "task"
 # run the task on the Duo's account, then import the session into the Duo window:
-/usr/bin/python3 -I ~/claude-duo/duo/duo-send.py send "task" --repo ~/path/to/repo --open
+/usr/bin/python3 -I ~/claude-squad/duo/duo-send.py send "task" --repo ~/path/to/repo --open
 # import a session by id (a background one, once it is idle):
-/usr/bin/python3 -I ~/claude-duo/duo/duo-send.py open --session <uuid>
+/usr/bin/python3 -I ~/claude-squad/duo/duo-send.py open --session <uuid>
 ```
 
 ## Turning it on
@@ -20,14 +20,14 @@ Links are off by default. From an up-to-date checkout, run the installer
 again with `--links`:
 
 ```bash
-~/claude-duo/duo/install-duo.sh --links
+~/claude-squad/duo/install-duo.sh --links
 ```
 
 It adds `@links claude-dev` right after `@apps user` in the Duo config
 (`~/.config/claude-instances/claude-duo.conf`), installs the toolset of this
 checkout (the builder and the integrity helper both changed) and rebuilds the
 Duo, so Claude and Claude Duo quit and reopen. From inside Claude it hands the
-build to "Update Claude Duo", as on a first install. The config ends up as:
+build to "Update Claude Squad", as on a first install. The config ends up as:
 
 ```
 @mode original-copy
@@ -88,9 +88,11 @@ Evidence from Claude Desktop 2.42304.0 (`app.asar`, main process bundle),
 
 ## What changed in the build
 
-- **Config:** `@links claude-dev` or `@links none` (the default), once, before
-  the instance rows, and only in `original-copy` mode, which has exactly one
-  managed copy. Any other value, a late line or a repeated one is refused.
+- **Config:** `@links claude-dev [name]` or `@links none` (the default), once,
+  before the instance rows, and only in `original-copy` mode. With several
+  copies the name is required and picks the one copy that takes the links;
+  the others declare no scheme. Any other value, a name that is not
+  configured, a late line or a repeated one is refused.
 - **Builder** (`bin/claude-build-worker.sh`): after deleting the stock URL
   types, it adds exactly one: `CFBundleURLName` `Claude <name> links`,
   `CFBundleURLSchemes` `[claude-dev]`.

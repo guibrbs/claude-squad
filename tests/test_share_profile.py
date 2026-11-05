@@ -51,6 +51,31 @@ class ShareProfileTests(unittest.TestCase):
                                            (p.read_bytes() if p.is_file() else None))
                 for p in sorted(root.rglob("*"))}
 
+    def test_account_takes_the_copy_folder_and_app_from_the_installed_config(self):
+        home = self.source.parent / "home"
+        trio = home / "code-trio"
+        trio.mkdir(parents=True, mode=0o700)
+        config = home / ".config/claude-instances/claude-duo.conf"
+        config.parent.mkdir(parents=True)
+        config.write_text("@mode original-copy\n@apps user\n"
+                          "Duo | x.duo | ~/Library/Application Support/Claude-Duo | 212 | CLAUDE_CONFIG_DIR=~/.claude-duo\n"
+                          "Trio | x.trio | ~/Library/Application Support/Claude-Trio | 275 | CLAUDE_CONFIG_DIR=~/code-trio\n")
+        (home / ".local/share/claude-duo").mkdir(parents=True)
+        (home / ".local/share/claude-duo/config-path").write_text(f"{config}\n")
+        env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+        def share(*args):
+            return subprocess.run(["/usr/bin/python3", "-I", str(SCRIPT), "--source", str(self.source), *args],
+                                  capture_output=True, text=True, timeout=30, env=env)
+        result = share("--account", "trio", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(os.readlink(trio / "skills"), str(self.source / "skills"))
+        self.assertFalse((home / ".claude-duo").exists())
+        for name in ("original", "../x", "two words"):
+            with self.subTest(name=name):
+                refused = share("--account", name)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("invalid copy name", refused.stderr)
+
     def test_dry_run_changes_nothing_and_never_prints_secrets(self):
         before = (self.snapshot(self.source), self.snapshot(self.duo))
         result = self.run_script()
