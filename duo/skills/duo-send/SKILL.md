@@ -1,6 +1,6 @@
 ---
 name: duo-send
-description: Talks to the Claude Duo account and hands it tasks (the second Claude Code account of this Mac, CLAUDE_CONFIG_DIR=~/.claude-duo) through duo/duo-send.py — synchronously, returning its answer like a subagent on the other account, or as a background session (--bg) that the user follows with `duo-send.py agents` and `attach`. Use for "send this to the Duo", "ask the Duo to…", "message the session X in the Duo", "tell the Duo session to…", "open a session on the other account", "let the Duo work on it in the background", or when this account's usage is running out and the work can go on in the Duo. Also reaches the other managed copies of the config (Claude Trio…) with `--to`: "send this to the Trio". Not for review rounds between the two accounts (that is loop-duo) and not from a session that already runs on the Duo account.
+description: Talks to the Claude Duo account and hands it tasks (the second Claude Code account of this Mac, CLAUDE_CONFIG_DIR=~/.claude-duo) through duo/duo-send.py — synchronously, returning its answer like a subagent on the other account, or as a background session (--bg) that the user follows with `duo-send.py agents` and `attach`. Use for "send this to the Duo", "ask the Duo to…", "message the session X in the Duo", "tell the Duo session to…", "open a session on the other account", "abre essa sessão no Claude Duo", "open it in the Duo instead of here", "give it to the Duo inbox", "do it in the Duo where I can see", "let the Duo work on it in the background", or when this account's usage is running out and the work can go on in the Duo. Also reaches the other managed copies of the config (Claude Trio…) with `--to`: "send this to the Trio". Not for review rounds between the two accounts (that is loop-duo) and not from a session that already runs on the Duo account.
 ---
 
 # duo-send
@@ -62,27 +62,81 @@ TASK
   original account's `claude agents` does not list it.
 - `--max-cost` does not work with `--bg`.
 
-## On the Duo's screen
+## Open a new session in the Duo instead of here
 
-When the user wants to see or drive the session in the Claude Duo window:
+When the user asks for a session in the Claude Duo ("abre essa sessão no
+Claude Duo", "open it in the Duo instead of here"), do what you would do to
+start a session of your own, but open it in the Duo:
+
+1. **Write the brief** with the same care you would give one of your own
+   sessions: the task, the repository and the files or area, what done looks
+   like, what not to do, and the decisions made so far. The Duo session has
+   none of this conversation.
+2. **Choose the folder** the session works in: the repository the task is
+   about, as an absolute path.
+3. **Short brief (up to about 3,500 characters):** open it with the brief as
+   the prompt:
+
+   ```bash
+   /usr/bin/python3 -I ~/.local/share/claude-duo/duo-send.py open --repo /path/to/repo --prompt - <<'BRIEF'
+   <the brief>
+   BRIEF
+   ```
+
+4. **Longer brief:** the prompt travels inside a link, and `open` refuses more
+   than 4,000 characters. Write the brief to `<repo>/.claude/duo-briefs/<short-name>.md`,
+   then open with a short prompt that points to it: `Read .claude/duo-briefs/<short-name>.md
+   and do what it asks. Delete the file when you are done.` Tell the user the
+   file is there, untracked.
+5. **Tell the user** that the session is open in the Claude Duo window with the
+   brief filled in, and that pressing Enter there starts it. The app never
+   starts it alone: a new session needs the person in that window.
+
+Show the user the brief before opening only when it holds something they have
+not seen or agreed to. Otherwise opening it is enough: nothing runs until they
+press Enter.
+
+To have the Duo run the task out of sight first and show the session only
+when it is done, use `send --open` instead:
 
 ```bash
-/usr/bin/python3 -I ~/.local/share/claude-duo/duo-send.py open --repo /path/to/repo --prompt "short prompt"
 /usr/bin/python3 -I ~/.local/share/claude-duo/duo-send.py send - --repo /path/to/repo --open --json <<'TASK'
 <the brief>
 TASK
 ```
 
-- `open` starts a new Code session in the Duo window with the prompt filled
-  in; the user presses Enter there. `send --open` runs the task, then imports
-  the session into the Duo window.
-- It needs the copy built with links. Only one copy can take
-  `claude-dev://` links (the config's `@links claude-dev <name>` line names
-  it): `open` to another copy is refused, and the error says which copy has
-  them. If the script refuses for that reason, tell the user to run
-  `duo/install-duo.sh --links` from an up-to-date checkout, which rebuilds
-  the copies and quits and reopens the apps; do not run it or edit the
-  config yourself.
+Both need the copy built with links. Only one copy can take `claude-dev://`
+links (the config's `@links claude-dev <name>` line names it): `open` to
+another copy is refused, and the error says which copy has them. If the script
+refuses for that reason, tell the user to run `duo/install-duo.sh --links` from
+an up-to-date checkout, outside any Claude session. It rebuilds the copies and
+quits and reopens the apps. Do not run it or edit the config yourself.
+
+## Hand a task to the Duo inbox (visible in the Duo window)
+
+The Duo inbox is a session in the Claude Duo window that runs /duo-inbox: it
+takes tasks by message, does them where the user can watch and step in, and
+reports back to you. Prefer it to `send` when the user wants to see or follow
+the work in the Duo. One inbox per folder.
+
+1. Find it right before sending (the address changes when it restarts):
+
+   ```bash
+   /usr/bin/python3 -I ~/.local/share/claude-duo/duo-send.py inbox --repo /path/to/repo
+   ```
+
+   If it says no inbox is open, run it again with `--open`. That opens a session
+   in the Duo window with `/duo-inbox` filled in. Ask the user to press Enter
+   there, then look the address up again.
+2. Show the user the brief and wait for their OK. Then `SendMessage` with `to`
+   set to that address, the first line `duo-inbox task: <short title>`, and the
+   full brief below it. The inbox has none of this conversation.
+3. Its messages come back to this session:
+   - `duo-inbox queued: …`: it is busy and will take yours next;
+   - `duo-inbox question: …`: answer with `SendMessage` to its `from`;
+   - `duo-inbox report: … — done | blocked | refused`: relay it to the user.
+   Nothing to poll. If this session closes first, the report stays in the Duo
+   window.
 
 ## Talk to a session already open in the Duo app
 

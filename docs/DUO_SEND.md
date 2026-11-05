@@ -101,7 +101,20 @@ profile, not in the Duo window. After `duo/install-duo.sh --links`:
 - `send … --open` imports the finished session into the Duo window;
 - `open --session <uuid>` imports any Duo session by id.
 
+In the original Claude, "abre essa sessão no Claude Duo" makes the `duo-send`
+skill write the brief as it would for a session of its own and run `open`
+with it (`--prompt -` reads it from standard input). A brief over the link's
+4,000 characters goes to `<repo>/.claude/duo-briefs/<name>.md`, and the prompt
+points to it. The session waits in the Duo window with the brief filled in,
+and pressing Enter there starts it: the app starts a new session only with the
+person in that window.
+
 How to turn it on and how it works: [DUO_VISIBLE_SESSION.md](DUO_VISIBLE_SESSION.md).
+
+## Handing work to a visible Duo session: the inbox
+
+To have the work happen in the Duo window, not in `-p` or `--bg`, send it to
+the Duo inbox: [DUO_INBOX.md](DUO_INBOX.md).
 
 ## Talking to a session already open in the Duo app
 

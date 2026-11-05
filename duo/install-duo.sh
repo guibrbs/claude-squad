@@ -8,7 +8,7 @@
 #   --no-build        prepare everything but do not build the Duo now
 #   --links           let the Duo take claude-dev:// links (duo-send.py open):
 #                     adds `@links claude-dev` to the config before building
-#   --no-skill        do not give the original Claude the duo-send skill
+#   --no-skill        do not install the duo-send and duo-inbox skills
 #   --add NAME        add another managed copy, "Claude NAME", for one more
 #                     account: a line with its own bundle id, Desktop profile
 #                     (~/Library/Application Support/Claude-NAME), Code folder
@@ -147,19 +147,29 @@ script="do shell script \"/bin/bash -p \" & quoted form of \"$(duo_as_text "$DUO
 "$OSACOMPILE" -o "$UPDATER_APP" -e "$script" || fail 'could not create the Update Claude Squad app'
 echo "App: $UPDATER_APP"
 
-if [ "$skill" = yes ]; then
-    step "duo-send skill for the original Claude"
-    skill_dir="$HOME/.claude/skills/duo-send"
-    skill_mark='<!-- claude-duo: installed by duo/install-duo.sh, which updates it; uninstall-duo.sh removes it -->'
-    if [ ! -d "$HOME/.claude" ] || [ -L "$HOME/.claude" ]; then
-        echo "Skipped: the original Claude has no Code folder (~/.claude) yet; run this again after opening Code once."
-    elif [ -L "$skill_dir" ] || { [ -e "$skill_dir" ] && ! /usr/bin/grep -qxF "$skill_mark" "$skill_dir/SKILL.md" 2>/dev/null; }; then
-        echo "Kept $skill_dir: it was not installed by $DUO_PRODUCT."
+skill_mark='<!-- claude-duo: installed by duo/install-duo.sh, which updates it; uninstall-duo.sh removes it -->'
+# Installs one of this checkout's skills into a Code folder's skills, as a marked
+# copy: reruns refresh it; a skill of the user's own, or a symlink, is kept.
+install_skill() {
+    local name="$1" code="$2" purpose="$3" dir
+    dir="$code/skills/$name"
+    if [ ! -d "$code" ] || [ -L "$code" ]; then
+        echo "Skipped $name: $code does not exist yet; run this again after opening Code there once."
+    elif [ -L "$dir" ] || { [ -e "$dir" ] && ! /usr/bin/grep -qxF "$skill_mark" "$dir/SKILL.md" 2>/dev/null; }; then
+        echo "Kept $dir: it was not installed by $DUO_PRODUCT."
     else
-        /bin/mkdir -p "$skill_dir" || exit 1
-        /usr/bin/install -m 644 "$DUO_TOOLS/skills/duo-send/SKILL.md" "$skill_dir/SKILL.md" || exit 1
-        echo "Skill: $skill_dir (ask the original Claude to send work to the Duo)"
+        /bin/mkdir -p "$dir" || exit 1
+        /usr/bin/install -m 644 "$DUO_TOOLS/skills/$name/SKILL.md" "$dir/SKILL.md" || exit 1
+        echo "Skill: $dir ($purpose)"
     fi
+}
+if [ "$skill" = yes ]; then
+    step "Skills: duo-send for the original Claude, duo-inbox for each copy"
+    install_skill duo-send "$HOME/.claude" "ask the original Claude to send work to the Duo"
+    for i in "${!DUO_NAMES[@]}"; do
+        [ -z "${DUO_CODE_DIRS[$i]}" ] || install_skill duo-inbox "${DUO_CODE_DIRS[$i]}" \
+            "send /duo-inbox in a Claude ${DUO_NAMES[$i]} session to make it the inbox"
+    done
 fi
 
 if [ "$auto_check" = yes ]; then

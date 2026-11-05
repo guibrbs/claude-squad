@@ -15,6 +15,11 @@ Two ways to send:
 `SendMessage` socket answers on: the original's sessions cannot list the Duo's,
 but they can send to that address, and the reply comes back by itself.
 
+`inbox` finds (or, with --open, opens) the Duo inbox session for a folder: a
+Desktop session running /duo-inbox, which takes tasks sent with SendMessage,
+does them in the Duo window and reports back. `whois` tells which account's
+session answers on an address, so the inbox only takes work from known senders.
+
 `open` (and `send --open`) shows a session in the Claude Duo window through a
 claude-dev:// link, which the copy registers when the config's `@links
 claude-dev` line names it (or names nothing, with one copy): a new Code session with the folder and the prompt filled
@@ -99,7 +104,12 @@ def open_duo_sessions(match=None, *, include_stale=False, to="duo"):
     The address is the session's messaging socket; it changes when the session's
     process restarts, so it is read right before sending, never kept.
     """
-    folder = duo(to)["folder"] / "sessions"
+    return registry_sessions(duo(to)["folder"], match, include_stale=include_stale)
+
+
+def registry_sessions(config, match=None, *, include_stale=False):
+    """The sessions one account's registry lists, with their address while they are live."""
+    folder = Path(config) / "sessions"
     found = []
     for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
         if path.is_symlink():
@@ -117,6 +127,43 @@ def open_duo_sessions(match=None, *, include_stale=False, to="duo"):
                       "cwd": data.get("cwd"), "session": data.get("sessionId"), "live": live,
                       "address": f"uds:{socket}" if live else None})
     return found
+
+
+INBOX = "Duo inbox"
+INBOX_SKILL = "/duo-inbox"
+
+
+def inbox_address(folder=None, to="duo"):
+    """The address of the one live inbox session of the copy working in `folder` (default: the current folder)."""
+    where, name = repository(folder), duo(to)["name"]
+    found = [item for item in open_duo_sessions(INBOX, to=to)
+             if item.get("cwd") and Path(str(item["cwd"])).resolve() == where]
+    if not found:
+        option = "" if str(to).lower() == "duo" else f" --to {shlex.quote(str(to))}"
+        raise Refused(f"no {name} inbox is open for {where}; open one with  duo-send.py inbox --open{option} --repo "
+                      f"{shlex.quote(str(where))}  and press Enter in the Claude {name} window")
+    if len(found) > 1:
+        raise Refused(f"more than one {name} inbox is open for {where}: " + "; ".join(i["name"] for i in found)
+                      + f"; close the extra ones in the Claude {name} window")
+    return found[0]
+
+
+def open_inbox(folder=None, to="duo"):
+    """A new Code session in the copy's window for `folder`, with /duo-inbox filled in for the user to send."""
+    return open_session(folder=str(repository(folder)), prompt=INBOX_SKILL, to=to)
+
+
+def whois(address):
+    """Which account's session answers on a SendMessage address (uds:/tmp/cc-socks/<pid>.sock)."""
+    socket_path = address[4:] if address.startswith("uds:") else address
+    if not SOCKET.match(socket_path):
+        raise Refused(f"not a session address: {address!r}")
+    for account in loop.account_ids():
+        config = loop.account(account)["folder"]
+        for item in registry_sessions(config) if config.is_dir() else []:
+            if item["address"] == f"uds:{socket_path}":
+                return {"account": account, **item}
+    raise Refused(f"no live session of any account answers on {address}")
 
 
 def duo(to="duo"):
@@ -175,7 +222,8 @@ def open_session(*, folder=None, prompt=None, session=None, to="duo"):
             raise Refused(f"invalid session id (the Duo imports a full UUID): {session!r}")
         return {"ok": True, "link": open_link("resume", [("session", session)], to)}
     if prompt and len(prompt) > PROMPT_LIMIT:
-        raise Refused(f"the prompt is longer than {PROMPT_LIMIT} characters; use `send` and then `open --session`")
+        raise Refused(f"the prompt is longer than {PROMPT_LIMIT} characters: write the brief to a file in the "
+                      "repository and open with a short prompt that points to it, or use `send --open`")
     params = [("folder", str(repository(folder)))]
     if prompt and prompt.strip():
         params.append(("q", prompt))
@@ -291,6 +339,14 @@ def main(argv=None):
                           help="prints only the address; exactly one session must match")
     sessions.add_argument("--all", action="store_true", help="also sessions whose process or socket is gone")
     sessions.add_argument("--json", action="store_true")
+    inbox = commands.add_parser("inbox", parents=[target], help="the address of the Duo inbox session for a folder")
+    inbox.add_argument("--repo", help="the folder the inbox works in (default: the current folder)")
+    inbox.add_argument("--open", action="store_true",
+                       help="opens a new inbox in the Claude Duo window, with /duo-inbox filled in")
+    inbox.add_argument("--json", action="store_true")
+    who = commands.add_parser("whois", help="which account's session answers on an address")
+    who.add_argument("address", help="uds:/tmp/cc-socks/<pid>.sock, as a message's `from` shows it")
+    who.add_argument("--json", action="store_true")
     agents = commands.add_parser("agents", parents=[target], help="lists the Duo's background sessions (JSON)")
     agents.add_argument("--all", action="store_true", help="also the finished ones")
     for verb, text in (("logs", "prints a Duo background session's recent output"),
@@ -299,13 +355,27 @@ def main(argv=None):
         commands.add_parser(verb, parents=[target], help=text).add_argument("session", help="the id (or part of the name)")
     args = parser.parse_args(argv)
 
-    to = args.to
+    to = getattr(args, "to", "duo")
     try:
-        label = duo(to)["name"] if args.command != "open" else loop.account(to)["name"]
+        label = (loop.account(to)["name"] if args.command == "open" else
+                 None if args.command == "whois" else duo(to)["name"])
         if args.command == "open":
             prompt = sys.stdin.read() if args.prompt == "-" else args.prompt
             result = open_session(folder=args.repo, prompt=prompt, session=args.session, to=to)
             print(f"opened in Claude {label}: {result['link'].split('?')[0]}")
+            return 0
+        if args.command == "inbox":
+            if args.open:
+                link = open_inbox(args.repo, to)["link"]
+                print(f"opened in Claude {label}: {link.split('?')[0]}; press Enter there to send {INBOX_SKILL}")
+                return 0
+            found = inbox_address(args.repo, to)
+            print(json.dumps(found, ensure_ascii=False, indent=2) if args.json else found["address"])
+            return 0
+        if args.command == "whois":
+            found = whois(args.address)
+            print(json.dumps(found, ensure_ascii=False, indent=2) if args.json
+                  else f"{found['account']}: {found['name']} ({found.get('cwd')})")
             return 0
         if args.command == "sessions":
             found = open_duo_sessions(args.match, include_stale=args.all and not args.address, to=to)

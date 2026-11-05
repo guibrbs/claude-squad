@@ -165,6 +165,10 @@ account, in a repository you name:
 - **`--bg`:** a background session on the Duo's account; returns its id at
   once. `duo-send.py agents`, `logs <id>`, `attach <id>` and `stop <id>` reach
   the Duo's sessions, which the original's `claude agents` does not list.
+- **Duo inbox:** a session in the Duo window that runs `/duo-inbox`, takes
+  tasks the original Claude sends, does them where you can watch, and reports
+  back. `duo-send.py inbox --open --repo …` opens one (press Enter there).
+  Details in [docs/DUO_INBOX.md](docs/DUO_INBOX.md).
 - **Another copy:** every command takes `--to trio` (or the name of any copy
   in the config) to reach that account instead of the Duo's.
 - **Talk to a session open in the Duo window:** `duo-send.py sessions` lists
@@ -174,10 +178,11 @@ account, in a repository you name:
 - **Same isolation as loop-duo:** the Duo's account, environment and
   `claude -p` turn come from `loop-duo.py`. `bypassPermissions` is refused.
 - **From the original Claude:** `install-duo.sh` installs the script in
-  `~/.local/share/claude-duo` and the `duo-send` skill in
-  `~/.claude/skills`, so you can just ask the original Claude to send work to
-  the Duo. It never replaces a `duo-send` skill of your own; `--no-skill`
-  skips it, and `uninstall-duo.sh` removes it.
+  `~/.local/share/claude-duo`, the `duo-send` skill in `~/.claude/skills` and
+  the `duo-inbox` skill in the Duo's Code folder, so you can just ask the
+  original Claude to send work to the Duo. It never replaces a skill of your
+  own with the same name; `--no-skill` skips them, and `uninstall-duo.sh`
+  removes them.
 
 - **On the Duo's screen:** after `duo/install-duo.sh --links` (it adds
   `@links claude-dev` to the config and rebuilds), `duo-send.py open --repo … --prompt "…"`
