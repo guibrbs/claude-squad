@@ -13,6 +13,14 @@ A process whose executable was deleted has no path (`proc_pidpath` fails with
 helper names each one on stderr with its PID and kernel process name, so the
 user knows what to quit.
 
+A zombie (a child that exited and was never reaped, such as a helper Chrome
+leaves behind) runs no executable. Newer macOS (seen on 27.0.1) answers both
+`proc_pidinfo` and `proc_pidpath` for it with `ESRCH` while `kill(pid, 0)` still
+succeeds, so the `SZOMB` check on `proc_pidinfo` is never reached. When either
+call fails and the PID still exists, the helper asks `sysctl(KERN_PROC_PID)`;
+a process of this user in `SZOMB` is skipped. Anything else still returns
+unknown.
+
 App-specific observation includes nested helpers under its `Contents/` path.
 Global observation recognizes Claude Desktop main/helper binaries and launchers.
 Rebuild/profile preparation, checkpoints and cache mutation require all observed

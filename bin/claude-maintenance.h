@@ -4,8 +4,19 @@
 #include <libproc.h>
 #include <sys/proc.h>
 #include <pwd.h>
+#include <sys/sysctl.h>
 
 static bool maintenance_gone(pid_t pid) { return kill(pid, 0) < 0 && errno == ESRCH; }
+// A process of this user that exited but was never reaped. It runs no
+// executable, so it cannot be an app; newer macOS answers proc_pidinfo and
+// proc_pidpath for it with ESRCH while kill(pid, 0) still succeeds.
+static bool maintenance_zombie(pid_t pid) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+    struct kinfo_proc info; size_t size = sizeof(info);
+    memset(&info, 0, sizeof(info));
+    return sysctl(mib, 4, &info, &size, NULL, 0) == 0 && size == sizeof(info) && info.kp_proc.p_pid == pid &&
+           info.kp_eproc.e_ucred.cr_uid == getuid() && info.kp_proc.p_stat == SZOMB;
+}
 static bool maintenance_match(const char *executable, const char *app) {
     if (app) {
         size_t size = strlen(app);
@@ -66,7 +77,7 @@ static int maintenance_process_scan(const char *app, bool report, bool *lasting)
         struct proc_bsdinfo before, after;
         if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &before, sizeof(before)) != sizeof(before)) {
             int error = errno;
-            if (maintenance_gone(pid)) continue;
+            if (maintenance_gone(pid) || maintenance_zombie(pid)) continue;
             if (report) fprintf(stderr, "process %d cannot be observed: %s\n", (int)pid, strerror(error));
             result = 2; break;
         }
@@ -81,7 +92,7 @@ static int maintenance_process_scan(const char *app, bool report, bool *lasting)
             proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, sizeof(after)) != sizeof(after)) {
             int error = errno;
             // Still unknown; keep scanning only to name every such process.
-            if (maintenance_gone(pid)) continue;
+            if (maintenance_gone(pid) || maintenance_zombie(pid)) continue;
             if (error == ENOENT) *lasting = true;
             if (report || error == ENOENT) maintenance_report(pid, &before, error);
             result = 2; continue;

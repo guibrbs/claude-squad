@@ -210,6 +210,25 @@ class MaintenanceTests(unittest.TestCase):
         result = subprocess.run([str(self.production), "desktop-idle"], env=self.env, text=True, capture_output=True)
         self.assertNotIn("duo-stale-probe", result.stderr)
 
+    def test_zombie_process_does_not_make_observation_unknown(self):
+        # A child that exited and was never reaped, like the helpers Chrome
+        # leaves behind: it runs no executable, so it cannot be the app. Newer
+        # macOS answers proc_pidinfo for it with ESRCH while kill(pid, 0) works.
+        process = subprocess.Popen(["/usr/bin/true"])
+        self.addCleanup(process.wait)
+        state = ""
+        for _ in range(100):
+            state = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(process.pid)],
+                                   capture_output=True, text=True).stdout.strip()
+            if state.startswith("Z"):
+                break
+            time.sleep(0.05)
+        self.assertTrue(state.startswith("Z"), state)
+        for command in (["desktop-idle"], ["app-state", str(self.apps / "Claude Synthetic.app")]):
+            result = subprocess.run([str(self.production), *command], env=self.env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 2, result.stderr)
+            self.assertNotIn(f"process {process.pid} ", result.stderr)
+
     def test_real_native_pid_path_observation_detects_only_selected_app_without_env_reads(self):
         app = self.apps / "Claude Synthetic.app"
         executable = app / "Contents/MacOS/Claude"
